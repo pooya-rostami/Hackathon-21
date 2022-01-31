@@ -23,4 +23,4 @@ Associated Publication -
 # Idea:
 1. Adding the machine learning part of BoDeGHa bot detection tool as a plugin to the GrimoireLab tool for identifying bot accounts in GitHub repositories
 
-2. Expanding the Grimoirelab's visualization capability for further studying about bots
+2. Use Grimoirelab's tool for Visualization and find room for its improvement to further study about bots
