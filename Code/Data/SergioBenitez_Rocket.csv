@@ -1,0 +1,3128 @@
+,author,body,number,created_at,empty
+0,Darksonn,See https://github.com/tokio-rs/tokio/pull/4162 for how we handled the same issue in Tokio.,1979,2021-11-06T07:48:42Z,0
+1,jackHedaya,It looks like this issue has been resolved on the forum post if the moderators want to close this,1979,2021-12-02T16:30:45Z,0
+2,Goodjooy,"Well it is my fault, I should read the entity of form data instant of just keeping a `DataStream`
+if I not read any data, there will not hit the boundary ",2015,2021-12-13T10:34:22Z,0
+3,SergioBenitez,"All of these cases can be easily implemented via custom `FromParam` implementations. With [const generics](https://github.com/rust-lang/rfcs/pull/2000), we could even have generic implementations. For instance, you could have an `Ext<T: FromParam, const &str>` type that implements `FromParam` by removing the extensions in its const parameter from the incoming request parameter and then converting the rest into `T` via its `FromParam` implementation. You'd then use it like:
+
+```rust
+#[get(""/<name>"")]
+fn item(name: Ext<&RawStr, "".json"">) { ... }
+```
+
+There are downsides to this approach. First, it complicates the type signature, though it could also be argued that it simplifies the route syntax while making the requirements more obvious. Second, and more importantly, it means that Rocket will see the following two routes as colliding, even though they aren't:
+
+```rust
+#[get(""/<name>"")]
+fn first(name: Ext<&RawStr, "".json"">) { ... }
+```
+
+```rust
+#[get(""/<name>"")]
+fn second(name: Ext<&RawStr, "".xml"">) { ... }
+```
+
+This would mean that you'd need to manually rank at least one of the two routes which is suboptimal given that Rocket _could_ have known about the non-collision. Of course, we could teach Rocket to assume that different `const` arguments in types indicates a non-collision, but that could be a fragile, and even incorrect change.
+
+The decision to disallow compound dynamic parameters was very intentional, and in particular, was made conservatively. The internal routing mechanism [actually supports](https://github.com/SergioBenitez/Rocket/blob/master/examples/manual_routes/src/main.rs#L71) all of these cases, but it is not exposed to the high-level interface for various reasons. I'm not convinced one way or another. I'm inclined to leave things as they are, prompting for the creation of custom `FromParam` implementations when needed, and ultimately having a collection of generic implementations using `const` generics in Rocket itself. If we decide to support this in the future, the change can be made in a fully backwards-compatible fashion.
+
+By the way, you should be using content negotiation instead of extensions in a path to negotiate content. Rocket makes this easy via the `format` route attribute parameter:
+
+```rust
+#[get(""/name"", format = ""application/json"")]
+fn item(name: String) { .. }
+```
+",339,2017-07-08T21:08:51Z,0
+4,kardeiz,"@SergioBenitez thanks for the reply and workaround.
+
+To be perfectly clear, I am not requesting _compound dynamic parameters_ in the sense of e.g.:
+
+    #[get(""/<name><something_else>"")]
+
+where the parser would have to dynamically determine the bounds of each capture segment. Dynamic segments as I've requested would still have to be delimited by a literal char or string (or end of string).
+
+Can you explain a little more the reasoning behind disallowing dynamic segments as identified above? It seems to me that wanting to capture parts of a URL path is related to but separate from the concept of ""path segments"". It seems an artificial limitation to require that the parts captured be delimited by '/'.
+
+Thanks!",339,2017-07-10T14:20:04Z,0
+5,max-frai,"+1 for this. I'm going to move my web application from php into rocket and it's not possible now. I already have routes like: `/<id>-<slug>` or even: `/<type>/filter:<fitler1>,<filter2>`. I can't change this because site is already indexed by search systems and there is a lot of traffic.",339,2017-07-23T10:02:13Z,0
+6,SergioBenitez,"@max-frai Just so it's clear: any URL scheme is possible with Rocket, as I illustrated in my first comment. The question is: which should Rocket implement support for out-of-the-box?",339,2017-07-25T06:42:41Z,0
+7,ebarnard,"I've also run up against this issue when implementing a server for an api that uses `<name>.json` style paths.
+
+While this url style can be made to work using `FromParam` with a custom type it seems at odds with the framework's focus on ease-of-use and expressibility to require users to write this boilerplate which will presumably be separately reimplemented by many users of the library.
+
+As this case is already supported by the internal routing mechanism it seems odd that it is not supported in route decorators. I think only modifications to `parser::uri::valid_segments` in the codegen module are required and I'd be happy to make them.",339,2017-08-07T11:59:02Z,0
+8,OddBloke,"This is something that I just hit when trying to build something that matches an existing implementation. I'll use the type signature workaround described, but wanted to register that I'd like to see this fixed.
+
+(For the record, I just want to have "".xml"" at the end of my URL; I don't believe I would need anything more than ""."" being considered a path separator for that.)",339,2018-07-06T04:12:42Z,0
+9,OddBloke,"Ugh, actually, I just realised that the example given involves writing a whole bunch of type boilerplate just to be able to append "".xml"" to a pattern. (I had assumed that the `Ext` described was provided by rocket for such cases.)
+
+So I guess I'll just handle this inside the handler function; that seems substantially less painful.",339,2018-07-06T04:18:42Z,0
+10,yu-re-ka,"Becaus `&'str` was not available for use in const generic arguments, I used a macro to build multiple structs.
+
+```
+macro_rules! generate_fromparam_ext {
+    ($struct_name: ident, $ext: expr) => {
+        struct $struct_name<'a> (&'a str);
+        impl<'a> FromParam<'a> for $struct_name<'a> {
+            type Error = ();
+
+            fn from_param(param: &'a str) -> Result<Self, Self::Error> {
+                match param.strip_suffix($ext) {
+                    None => Err(()),
+                    Some(x) => FromParam::from_param(x).map(|x| $struct_name(x)).map_err(|_| ()),
+                }
+            }
+        }
+    };
+}
+
+generate_fromparam_ext!(NarinfoName, "".narinfo"");",339,2021-12-13T21:03:49Z,0
+11,jebrosen,"The problem is actually that `Serialize` is not implemented for `Users`: https://api.rocket.rs/v0.4/rocket_contrib/json/struct.Json.html#sending-json
+
+I think if you had tried to return `-> Json<Vec<Users>>`, the error message would say that. The implementation of `Responder` for `Result` uses the unstable specialization feature, which has the side effect of making the error message less helpful.",1022,2019-06-02T17:27:35Z,0
+12,JayHelton,"@jebrosen WOW, I apologize for missing that. Thank you very much!",1022,2019-06-02T19:03:16Z,0
+13,vladinator1000,"It's weird how just flipping the types makes it clearer. I had the same problem using Diesel's QueryResult type: 
+` QueryResult<Json<Vec<Post>>>` -> ` Json<QueryResult<Vec<Post>>>`
+
+Second one displays the nice error:
+```
+The trait bound `diesel::result::Error: serde::ser::Serialize` is not satisfied""
+```",1022,2019-07-10T20:00:56Z,0
+14,jebrosen,"In that example the requirements on `diesel::result::Error` are arrived at in very different ways:
+
+* `Json<Result<Vec<Post>, diesel::result::Error>>: Responder`
+  * requires `Result<Vec<Post>, diesel::result::Error>: Serialize`
+    * requires `Vec<Post>: Serialize` and `diesel::Result::Error: Serialize`.
+
+* `Result<Json<Vec<Post>>, diesel::result::Error>: Responder`
+  * requires either:
+    * `Json<Vec<Post>>: Responder` and `diesel::result::Error: Debug`
+    * OR: `Json<Vec<Post>>: Responder` and `diesel::result::Error: Debug + Responder`
+    * This choice of two bounds is only possible because `impl Responder for Result` uses the specialization feature, and I believe that's why the error message is incomplete. If `impl Responder for Result` was not specialized and required just one of `Debug` or `Responder`, I'm pretty sure the error message would say `` `diesel::result::Error: Debug` is not satisfied`` as expected.",1022,2019-07-10T20:32:13Z,0
+15,huangjj27,"but why I get similar error even if I derive `Serialize` for both `Ok` and `Err`?
+```rust
+use rocket::post;
+use rocket::response::status;
+use rocket::http::Status;
+use rocket_contrib::json::Json;
+use serde::{ Serialize, Deserialize };
+
+#[derive(Deserialize)]
+pub(crate) struct PostUser {
+    phone: String,
+    password: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct NewUser {
+    uid: u64,
+    phone: String,
+}
+
+
+#[derive(Serialize)]
+pub(crate) struct ErrRegistered {
+    err: &'static str,
+    phone: String,
+}
+
+#[post(""/users"", data = ""<user>"")]
+pub(crate) fn create(user: Json<PostUser>)
+    -> Result<status::Created<Json<NewUser>>, status::Custom<Json<ErrRegistered>>> {
+    let PostUser { phone, password } = user.deref();
+
+    if let Some(_uid) = find_registered(&phone) {
+        let err = Json(ErrRegistered {
+            err: ""PHONE_NUMBER_RIGISTERED"",
+            phone: phone.to_string(),
+        });
+
+        return Err(status::Custom(Status::Conflict, err));
+    }
+
+    let uid = register(&phone, &password).expect(""Register failed!"");
+
+    let new_user = Json(NewUser {
+        uid,
+        phone: phone.to_string(),
+    });
+    let uri = format!(""/users/{}"", uid).to_string();
+
+    Ok(status::Created(uri, Some(new_user)))
+}
+
+fn find_registered(p: &str) -> Option<u64> {
+    Some(10086)
+}
+
+fn register(phone: &str, pass: &str) -> Result<u64, ()> {
+    Ok(10086)
+}
+```
+
+Here is the Error:
+```
+error[E0277]: the trait bound `std::result::Result<rocket::response::status::Created<rocket_contrib::json::Json<users::NewUser>>, rocket::response::status::Custom<rocket_contrib::json::Json<users::ErrRegistered>>>: rocket::response::responder::Responder<'_>` is not satisfied
+   --> src\users.rs:27:1
+    |
+27  | #[post(""/users"", data = ""<user>"")]
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `rocket::response::responder::Responder<'_>` is not implemented for `std::result::Result<rocket::response::status::Created<rocket_contrib::json::Json<users::NewUser>>, rocket::response::status::Custom<rocket_contrib::json::Json<users::ErrRegistered>>>`
+    | 
+   ::: C:\Users\34937\.cargo\registry\src\mirrors.sjtug.sjtu.edu.cn-7a04d2510079875b\rocket-0.4.2\src\handler.rs:202:20
+    |
+202 |     pub fn from<T: Responder<'r>>(req: &Request, responder: T) -> Outcome<'r> {
+    |                    ------------- required by this bound in `rocket::handler::<impl rocket::outcome::Outcome<rocket::response::response::Response<'r>, rocket_http::status::Status, rocket::data::data::Data>>::from`
+    |
+    = help: the following implementations were found:
+              <std::result::Result<R, E> as rocket::response::responder::Responder<'r>>
+              <std::result::Result<R, E> as rocket::response::responder::Responder<'r>>
+
+error: aborting due to previous error
+```
+
+Since that `u64`, `String` or `&'_ str` is primitive type, `Responder` should be `impl`ed. Therefore, the` `Json`s and `status::Created`/`status::Custom` should implement `Responder` too, And I've checked. Even `Result<(), ()>` can pass the compile. Why this error comes out? Is there anything I'm missing?",1022,2019-11-01T15:44:25Z,0
+16,jebrosen,"That error is appearing because the Error type has to implement `Debug`, even though you are using the `Responder` implementation.",1022,2019-11-01T16:40:56Z,0
+17,huangjj27,"> That error is appearing because the Error type has to implement Debug, even though you are using the Responder implementation.
+
+@jebrosen Yes, I added `Debug` and issue is solved! Thanks!",1022,2019-11-02T01:34:13Z,0
+18,ghost,"> That error is appearing because the Error type has to implement `Debug`, even though you are using the `Responder` implementation.
+
+@jebrosen If you ever happen to have the time, I was wondering if you could explain why the compiler gives such a seemingly counter intuitive error? Why is it complaining about the Responder trait instead of the Debug trait?",1022,2020-07-23T03:05:41Z,0
+19,jebrosen,"@rainyday In 0.4, rocket used the `specialization` feature so that it could implement both of these:
+
+* `impl<T, E> Responder for Result<T, E> where T: Responder, E: Debug`
+* `impl<T, E> Responder for Result<T, E> where T: Responder, E: Debug + Responder`
+
+One of the side effects of the `specialization` feature seems to be incomplete error messages like the one above - *usually* rustc prints out some kind of hint about which part of the `where` is not satisfied. As specialization gets closer to being stable, I expect these and similar error messages to improve.
+
+---
+
+But, the `master` branch (upcoming for 0.5) does not use `specialization` anymore since it is an unstable feature. Only this `impl` exists now:
+
+* `impl<T, E> Responder for Result<T, E> where T: Responder, E: Responder`
+
+The previous behavior can be restored by using <https://api.rocket.rs/master/rocket/response/struct.Debug.html>. This type was also backported to 0.4 for an easier migration path, and there is a runtime warning if using the removed `impl`: <https://github.com/SergioBenitez/Rocket/commit/436a5aad579f7f9e0053ec4fc35c068baf148d64>",1022,2020-07-23T03:32:59Z,0
+20,ajstyles0524,"`use log::*;
+use reqwest::Error;
+use rocket::launch;
+use rocket::routes;
+use rocket::Rocket;
+use rocket::{get, Build};
+use rocket::serde::Deserialize;
+use rocket::serde::Serialize;
+use reqwest::Response;
+#[derive(Serialize, Deserialize)]
+pub struct Welcome {
+    #[serde(rename = ""_id"")]
+    id: i64,
+    name: Name,
+    contribs: Vec<String>,
+    awards: Vec<Award>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Award {
+    award: String,
+    year: i64,
+    by: String,
+}
+#[derive( Serialize, Deserialize)]
+pub struct Name {
+    first: String,
+    last: String,
+}
+#[get(""/"")]
+async fn index()->Result<(),reqwest::Error>{
+    let result = reqwest::get(""https://mocki.io/v1/3fee675e-373e-44c7-bb2e-5fc6512fb055"")
+        .await?
+        .json::<Welcome>()
+        .await?;
+    println!(""{:#?}"", result.awards[0]);
+    Ok(())
+}
+#[launch]
+fn rocket() -> Rocket<Build> {
+    rocket::build().mount(""/"", routes![index])
+}
+  `
+@jebrosen @zackchandler @vladinator1000 @JayHelton 
+when i run the above code i got an error mgs i do not why
+
+The Error message
+
+`error[E0277]: the trait bound `reqwest::Error: Responder<'_, '_>` is not satisfied
+   --> src/main.rs:30:19
+    |
+30  | async fn index()->Result<(),reqwest::Error>{
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Responder<'_, '_>` is not implemented for `reqwest::Error`
+    |
+    = note: required because of the requirements on the impl of `Responder<'_, '_>` for `Result<(), reqwest::Error>`
+note: required by a bound in `route::handler::<impl Outcome<rocket::Response<'o>, Status, rocket::Data<'o>>>::from`
+   --> /home/knoldus/.cargo/registry/src/github.com-1ecc6299db9ec823/rocket-0.5.0-rc.1/src/route/handler.rs:188:20
+    |
+188 |     pub fn from<R: Responder<'r, 'o>>(req: &'r Request<'_>, responder: R) -> Outcome<'r> {
+    |                    ^^^^^^^^^^^^^^^^^ required by this bound in `route::handler::<impl Outcome<rocket::Response<'o>, Status, rocket::Data<'o>>>::from`
+
+`",1022,2021-12-21T09:14:42Z,0
+21,robertwayne,"I know this is 2 weeks old, but if you just put a `return` in front of your outcome, this will work as expected.
+
+```rust
+match request.headers().get_one(""Authorization"") {
+    Some(header) => {
+        let re = Regex::new(r""(Bearer\s\S*)"").unwrap();
+        if re.is_match(header) {
+            // regex valid auth header
+            println!(""{}"", header);
+        } else {
+            // regex invalid auth header
+            return Outcome::Failure((Status::BadRequest, RequestError::ParseError));
+        }
+    }
+    None => {}
+}
+```
+
+`rob@pop-os:~$ curl --header ""Authorization: BrokenBearer"" http://127.0.0.1:8000/test`
+```
+GET /test:
+   >> Matched: (test) GET /test
+   >> `Device` request guard failed: ParseError.
+   >> Outcome: Failure
+   >> No 400 catcher registered. Using Rocket default.
+   >> Response succeeded.
+```
+```
+<!DOCTYPE html>
+<html lang=""en"">
+<head>
+    <meta charset=""utf-8"">
+    <title>400 Bad Request</title>
+</head>
+<body align=""center"">
+    <div role=""main"" align=""center"">
+        <h1>400: Bad Request</h1>
+        <p>The request could not be understood by the server due to malformed syntax.</p>
+        <hr />
+    </div>
+    <div role=""contentinfo"" align=""center"">
+        <small>Rocket</small>
+    </div>
+</body>
+</html>
+```
+
+`rob@pop-os:~$ curl --header ""Authorization: Bearer foo""  127.0.0.1:8000/test`
+```
+GET /test:
+   >> Matched: (test) GET /test
+Bearer foo
+   >> Outcome: Success
+   >> Response succeeded.
+```
+```
+Hello test
+```",2016,2021-12-27T18:06:54Z,0
+22,tobymurray,"My understanding is that Rocket doesn't implicitly know what to do with this. The docs cover some of it here: https://rocket.rs/v0.5-rc/guide/requests/#requests as well as a workaround. As suggested when it fails to compile, you can give them different rankings:
+
+```
+Error: Rocket failed to launch due to the following route collisions:
+   >> (func1) GET /known_issues?<issue_name> [2] collides with (func2) GET /known_issues?<test_id> [2]
+   >> Note: Route collisions can usually be resolved by ranking routes.
+```
+E.g. something like this should start up
+```
+#[get(""/known_issues?<issue_name>"", rank = 2)]
+pub fn func1(...) {...}
+
+#[get(""/known_issues?<test_id>"", rank = 3)]
+pub fn func2(...) {...}
+```",2012,2021-12-10T21:42:21Z,0
+23,oren0e,"Thanks, yeah that's what I ended up doing. ",2012,2021-12-15T20:44:43Z,0
+24,jebrosen,"When I'm at a real keyboard I can explain further, but here a few highlights:
+
+* A new error handling design Sergio came up with is blocked for now because TypeId doesn't work on non-`'static` types, but IIRC the design would address most of your issues/questions -- including responding automatically if the error is a `Responder`. It's definitely a goal to ""fix"" error handling, but other things have been more important recently.
+*  The `Try` trait and its implementation for `Outcome` are a bit painful, I can see that. Have you seen `IntoOutcome`? I think it helps somewhat with this exact case.
+* Error catchers are in an awkward spot: They currently don't (and I think can't, again because of some typing details) get any actual error values. They currently work okay for replacing the plain default error pages, but can't do much more exciting and I don't think they are what you want in this particular case.",857,2018-12-11T16:37:18Z,0
+25,SergioBenitez,"Everything @jebrosen said is exactly on point. Regarding the `Try` implementation, we currently can't make it better due to the way the trait is defined. For details, see #597.
+
+However, [`IntoOutcome`](https://api.rocket.rs/v0.4/rocket/outcome/trait.IntoOutcome.html) should still help here and would remove the need for the `From` impl in some cases. You'd still need to pass the `Status` in to the `into_outcome` call, however.
+
+> Given an error type that implements Responder (which I'd assume to be the common case in a Rocket app), that is rather redundant.
+
+I don't think this is the case at the moment because returning a `Responder` is only marginally more useful that _not_ returning a `Responder`. With the error catcher redesign, returning a `Responder` would indeed be meaningful, but as @jebrosen states, it's currently not possible to implement that design. (You can review that design [here](https://paste.rs/Jg0.md).)
+
+In all, we have plans to ameliorate all of the issues you've raised, but all of them are blocked on upstream Rust changes. The `Try` changes are blocked on a redesigned `Try` trait in https://github.com/rust-lang/rust/issues/42327, while the catcher redesign is blocked in https://github.com/rust-lang/rust/issues/41875. ",857,2018-12-11T23:50:49Z,0
+26,RalfJung,"Thanks for your responses, good to hear that I didn't just miss something obvious!
+
+> I don't think this is the case at the moment because returning a Responder is only marginally more useful that not returning a Responder.
+
+In my case, it's about sharing the error type between handlers and `from_data`.
+
+> However, IntoOutcome should still help here and would remove the need for the From impl in some cases. You'd still need to pass the Status in to the into_outcome call, however.
+
+I am looking at `IntoOutcome` now, and I don't see how it helps. First I thought I would aim for something like `header.parse().into_outcome()?`, but that doesn't make any sense because `into_outcome` takes *two* parameters -- `self` and `Failure`.
+
+So I guess the idea is I would do `header.parse().into_outcome(Status::BadRequest)?` or so?  But one key design goal in my setup was to only have one place that maps errors to status codes, so this is not a direction I would like to take.",857,2018-12-13T18:21:29Z,0
+27,johnbcoughlin,"I managed to find a satisfactory solution to this issue by defining a `status` method on my custom error type. Then you can write something like this:
+
+```
+let result: Result<ParsedData, MyError> = fallible_expr();
+result.into_outcome(result.err().map(|e| e.status()).unwrap_or(Status::Ok))
+```
+
+Then you can reuse the `.status()` method in the `Responder` impl that you'll use in the handler.",857,2019-04-07T17:59:37Z,0
+28,RalfJung,"Yeah, that seem similar to the `status` method I have in the OP. I wouldn't call this ""satisfactory"" though.",857,2019-04-09T20:31:01Z,0
+29,SergioBenitez,Closing in favor of #597 and #749 which together resolve these issues.,857,2019-05-16T02:53:41Z,0
+30,oren0e,"I'm not sure if this is related to this, but dealing with the same issue as the OP, I find a strange behaviour - if I implement `FromDataSimple` for my type and in the `from_data()` method I return somewhere a Failure with my custom error - I still get the default rocket error response (the one that comes with a catcher), although I never intended to use a catcher...
+
+so in the following:
+```rust
+impl FromDataSimple for KnownIssue {
+    type Error = DispatcherrError;
+
+    fn from_data(req: &Request, data: Data) -> data::Outcome<Self, Self::Error> {
+        // Ensure content type is json
+        if req.content_type() != Some(&ContentType::JSON) {
+            return Outcome::Forward(data);
+        }
+
+        let mut issue_str = String::new();
+        if let Err(e) = data.open().take(LIMIT).read_to_string(&mut issue_str) {
+            return Failure((
+                Status::InternalServerError,
+                DispatcherrError::InternalServerError(anyhow::anyhow!(e)),
+            ));
+        }
+
+        let issue_to_insert = match serde_json::from_str(&issue_str) {
+            Ok(issue) => issue,
+            Err(e) => {
+                return Failure((
+                    Status::InternalServerError,
+                    DispatcherrError::InternalServerError(e.into()),
+                ))
+            }
+        };
+        Success(issue_to_insert)
+    }
+}
+```
+If `serde_json` deserialization fails, I expect to see also the error which comes from the variant `                   DispatcherrError::InternalServerError`
+But all I get is the default rocket internal server error html.",857,2021-12-28T16:53:52Z,0
+31,SergioBenitez,Fixed quite some time ago in master. ,1893,2021-09-10T17:45:04Z,0
+32,searsaw,@SergioBenitez running `0.5.0-rc.1` and seeing this same issue. Should this also be fixed in `0.5.0`?,1893,2021-10-22T13:25:45Z,0
+33,billy1624,"Hi @SergioBenitez, will the fix be released some time soon on crates.io?",1893,2021-12-29T04:36:01Z,0
+34,fabricedesre,"Having a ""native"" built in support would be better. We did something for iron, which was quite simple (https://github.com/fxbox/iron-cors/).",25,2016-12-23T19:07:10Z,0
+35,kybishop,Info a little more readable than the w3 spec :wink:: http://enable-cors.org/server.html,25,2016-12-29T08:40:09Z,0
+36,SergioBenitez,"I agree that Rocket should have a nicer way to handle this, and it's on my list of things to determine how to do better. For now, I've added the ability to use `#[route(OPTIONS, ""/"", ...)]` to manually handle `OPTIONS` requests in https://github.com/SergioBenitez/Rocket/commit/2de006d9f91589a885924acc8712e87d310692e4. As soon as #83 is resolved, you'll be able to use `options` as a decorator directly.",25,2016-12-30T06:52:34Z,0
+37,flosse,I'd love to see a full CORS example :) Did someone already made experiences?,25,2017-01-05T15:35:14Z,0
+38,sebasmagri,"This is what I'm currently doing to handle the preflight request:
+
+```
+#[route(OPTIONS, ""/endpoint/"")]
+fn options_handler<'a>() -> Response<'a> {
+    Response::build()
+        .raw_header(""Access-Control-Allow-Origin"", ""http://host.tld"")
+        .raw_header(""Access-Control-Allow-Methods"", ""OPTIONS, POST"")
+        .raw_header(""Access-Control-Allow-Headers"", ""Content-Type"")
+        .finalize()
+}
+```
+However, for a handler returning data, I can't still find a way to wrap the existing response in a `Response` to add the headers. The existing handler looks like this:
+
+```
+#[post(""/endpoint/"", format = ""application/json"", data = ""<config>"")]
+fn post_handler(config: JSON<Config>) -> Option<JSON<Wrapper>> {
+    let wrapper = factory(report_id);
+    match wrapper {
+        Some(f) => Some(JSON(f(&(config.unwrap())))),
+        None => None
+    }
+}
+```
+
+Is this a correct approach? How could I add headers to the `JSON` response?",25,2017-01-07T00:49:38Z,0
+39,kybishop,"@sebasmagri JSON impliments [the Responder trait](https://api.rocket.rs/rocket/response/content/struct.JSON.html). Something like this should work:
+
+```rust
+#[post(""/endpoint/"", format = ""application/json"", data = ""<config>"")]
+fn post_handler<'request>(config: JSON<Config>)
+                          -> Option<Result<Response<'request>, &'str>> {
+    let wrapper = factory(report_id);
+    match wrapper {
+        Some(f) => {
+            let response = Response::build_from(JSON(f(&(config.unwrap()))).respond().unwrap());
+
+            response.header(hyper::header::AccessControlAllowOrigin::Any)
+
+            Some(response.ok())
+        },
+        None => None
+    }
+}
+```",25,2017-01-07T04:46:04Z,0
+40,SergioBenitez,"@kybishop's got the right idea, but you should rarely, if ever, be constructing a `Response` object in your handler. Instead, create a new type and implement `Responder` for it. You can then return it directly from your handler. See the [wrapping Responder](https://rocket.rs/guide/responses/#wrapping) section of the guide for more info.
+
+For this problem in particular, I would create a new `CORS` type and implement `Responder` for it. I implemented a small one, and I copy the code below. It's incomplete, inefficient, and could be made less error-prone, but it works, and using it is clean.
+
+```rust
+use std::collections::HashSet;
+use rocket::response::{self, Response, Responder};
+use rocket::http::Method;
+
+struct CORS<R> {
+    responder: R,
+    allow_origin: &'static str,
+    expose_headers: HashSet<&'static str>,
+    allow_credentials: bool,
+    allow_headers: HashSet<&'static str>,
+    allow_methods: HashSet<Method>,
+    max_age: Option<usize>
+}
+
+type PreflightCORS = CORS<()>;
+
+impl PreflightCORS {
+    pub fn preflight(origin: &'static str) -> PreflightCORS {
+        CORS::origin((), origin)
+    }
+}
+
+impl<'r, R: Responder<'r>> CORS<R> {
+    pub fn origin(responder: R, origin: &'static str) -> CORS<R> {
+        CORS {
+            responder: responder,
+            allow_origin: origin,
+            expose_headers: HashSet::new(),
+            allow_credentials: false,
+            allow_headers: HashSet::new(),
+            allow_methods: HashSet::new(),
+            max_age: None
+        }
+    }
+
+    pub fn any(responder: R) -> CORS<R> {
+        CORS::origin(responder, ""*"")
+    }
+
+    pub fn credentials(mut self, value: bool) -> CORS<R> {
+        self.allow_credentials = value;
+        self
+    }
+
+    pub fn methods(mut self, methods: Vec<Method>) -> CORS<R> {
+        for method in methods {
+            self.allow_methods.insert(method);
+        }
+
+        self
+    }
+
+    pub fn headers(mut self, headers: Vec<&'static str>) -> CORS<R> {
+        for header in headers {
+            self.allow_headers.insert(header);
+        }
+
+        self
+    }
+
+    // TODO: Add more builder methods to set the rest of the fields.
+}
+
+impl<'r, R: Responder<'r>> Responder<'r> for CORS<R> {
+    fn respond(self) -> response::Result<'r> {
+        let mut response = Response::build_from(self.responder.respond()?)
+            .raw_header(""Access-Control-Allow-Origin"", self.allow_origin)
+            .finalize();
+
+        match self.allow_credentials {
+            true => response.set_raw_header(""Access-Control-Allow-Credentials"", ""true""),
+            false => response.set_raw_header(""Access-Control-Allow-Credentials"", ""false"")
+        };
+
+        if !self.allow_methods.is_empty() {
+            let mut methods = String::with_capacity(self.allow_methods.len() * 7);
+            for (i, method) in self.allow_methods.iter().enumerate() {
+                if i != 0 { methods.push_str("", "") }
+                methods.push_str(method.as_str());
+            }
+
+            response.set_raw_header(""Access-Control-Allow-Methods"", methods);
+        }
+
+        // FIXME: Get rid of this dupe.
+        if !self.allow_headers.is_empty() {
+            let mut headers = String::with_capacity(self.allow_headers.len() * 15);
+            for (i, header) in self.allow_headers.iter().enumerate() {
+                if i != 0 { headers.push_str("", "") }
+                headers.push_str(header);
+            }
+
+            response.set_raw_header(""Access-Control-Allow-Headers"", headers);
+        }
+
+        // TODO: Inspect and set the rest of the fields.
+
+        Ok(response)
+    }
+
+}
+```
+
+You would then use it in routes like:
+
+```rust
+#[route(OPTIONS, ""/item"")]
+fn cors_preflight() -> PreflightCORS {
+    CORS::preflight(""http://host.tld"")
+        .methods(vec![Method::Options, Method::Post])
+        .headers(vec![""Content-Type""])
+}
+
+#[post(""/item"")]
+fn cors_demo() -> CORS<&'static str> {
+    CORS::any(""This is the response."")
+}
+```
+
+In the particular `POST` route above, you could do:
+
+```rust
+#[post(""/item"")]
+fn cors_demo() -> CORS<Option<JSON<Wrapper>>> {
+    CORS::any(option_json_wrapper)
+}
+```",25,2017-01-07T05:58:12Z,0
+41,sebasmagri,I believe having this type into the framework would be really good. Thanks @SergioBenitez ,25,2017-01-07T14:00:41Z,0
+42,rofrol,"Regarding the code from https://github.com/SergioBenitez/Rocket/issues/25#issuecomment-271065434, I have found this:
+
+>The only valid value for this header is true (case-sensitive). If you don't need credentials, omit this header entirely (rather than setting its value to false).
+
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Credentials
+
+",25,2017-04-20T19:26:16Z,0
+43,SergioBenitez,"Now that #55 has landed, we can add proper support for CORS to Rocket! I'm happy to field any design ideas and/or mentor anyone who might be willing to implement some CORS related fairings and structures for `contrib`.",25,2017-04-21T03:34:57Z,0
+44,Arzte,"This could be a fun way to use fairings for the first time & contribute to rocket something that would be super helpful for a project of mine. I'm going to get started trying to implement this into ``contrib`` via. fairings. @SergioBenitez I'll take some of the code you provided for a CORS type to make this come in faster. (I realize some work is to be done on that example, just part of the fun) ~~I'll send in a pr today or tomorrow with a basic implementation for it.~~
+
+EDIT: I'm waiting on 0.3.0 as there's more work to be done on fairings, I'm still working on it, but I'm planning to really get a pr in after 0.3 is out.",25,2017-04-21T15:24:06Z,0
+45,SergioBenitez,@SirDoctors Just a heads up: the fairings implementation that just landed in `master` is _very_ likely to be the version that ships in 0.3.,25,2017-05-19T11:02:29Z,0
+46,nicholasday,"Just for future reference, here is the fairing I wrote for easy CORS:
+
+```rust
+use rocket::{Request, Response};
+use rocket::fairing::{Fairing, Info, Kind};
+use rocket::http::{Header, ContentType, Method};
+use std::io::Cursor;
+
+pub struct CORS();
+
+impl Fairing for CORS {
+    fn info(&self) -> Info {
+        Info {
+            name: ""Add CORS headers to requests"",
+            kind: Kind::Response
+        }
+    }
+
+    fn on_response(&self, request: &Request, response: &mut Response) {
+        if request.method() == Method::Options || response.content_type() == Some(ContentType::JSON) {
+            response.set_header(Header::new(""Access-Control-Allow-Origin"", ""http://localhost:9000""));
+            response.set_header(Header::new(""Access-Control-Allow-Methods"", ""POST, GET, OPTIONS""));
+            response.set_header(Header::new(""Access-Control-Allow-Headers"", ""Content-Type""));
+            response.set_header(Header::new(""Access-Control-Allow-Credentials"", ""true""));
+        }
+
+        if request.method() == Method::Options {
+            response.set_header(ContentType::Plain);
+            response.set_sized_body(Cursor::new(""""));
+        }
+    }
+}
+```
+You just have to attach it like this:
+```rust
+rocket::ignite()
+    .attach(CORS())
+```",25,2017-07-09T03:15:23Z,0
+47,dlight,@nicholasday perhaps this fairing could be added to contrib?,25,2017-07-18T09:27:33Z,0
+48,mehcode,"Now that Rocket v0.3 is here a formalized ( and configurable, see https://echo.labstack.com/middleware/cors for an idea ) should definitely be added to contrib.",25,2017-07-18T09:43:35Z,0
+49,lawliet89,"I have implemented CORS both as Fairing and for ad-hoc route based usage in a [`rocket_cors`](https://github.com/lawliet89/rocket_cors) crate. Hopefully the documentation is sufficient. The options are configurable.
+
+The problem with @nicholasday's implementation is that if the routes have any side effects, it will be too late to reverse them if the CORS check fails in `on_response`.
+",25,2017-07-18T10:22:12Z,0
+50,skondrashov,"I have been using the @nicholasday solution for my project, and it works fine for GET requests. Now I am adding my first POST request and not sure how I can use Rocket for this. Rocket claims success on the request:
+```
+POST /image/label/submit application/x-www-form-urlencoded; charset=UTF-8:
+    => Matched: POST /image/label/submit (add_label)
+    => Outcome: Success
+    => Response succeeded.
+```
+but Chrome tells a different story:
+```
+Failed to load http://localhost:8000/image/label/submit: No 'Access-Control-Allow-Origin' header is present on the requested resource. Origin 'http://localhost:7700' is therefore not allowed access.
+```
+
+Is there a way I can modify that code to work with POST requests? Am I missing something? Not to sound too negative, but I don't think CORS is intuitive or simple enough that everyone who wants to write an API with Rocket should be required to slog through custom solutions like this...
+```
+#[post(""/image/label/submit"", data = ""<data>"")]
+fn add_label(data: String) -> String {
+	data
+}
+```
+This is the API call, in case the mistake is here.
+
+EDIT: Of course, as is standard for asking questions on the internet, I figured it out almost immediately after asking. The problem is that I have the String return type for this POST request, and the fairing only applies to JSON return types. Not that hard to tell if you read the code, but if you can't read like me, my adventure may be helpful! @nicholasday 's solution only works for JSON requests, so if you have issues, make sure your requests return JSON (as I am now going to do), or add a check for ContentType::Plain just like the `response.content_type() == Some(ContentType::JSON)` in the code.",25,2018-07-03T17:15:14Z,0
+51,derekdreery,@tkondrashov I might be wrong but I think that CORS only applies to json.,25,2019-05-13T18:17:49Z,0
+52,LeviSchuck,Is this considered stalled?,25,2019-08-19T00:30:56Z,0
+53,derekdreery,@LeviSchuck I believe this is kinda blocked on fairings being able to return early (because for preflight requests there is no need to go to any route handler - we can just intercept the request early and return whatever parameters are set for Access-Control-Allow-Origin et. al.),25,2019-08-20T10:32:30Z,0
+54,derekdreery,@LeviSchuck you may be interested in https://crates.io/crates/rocket_cors,25,2019-08-20T10:33:32Z,0
+55,DanielJoyce,"options requests need to be handle in the routing layer somewhere, where it checks a route matches but doesn't invoke the handler. This way there is no need to duplicate handlers just to return CORS headers.",25,2021-03-06T00:16:13Z,0
+56,superjose,"Has anyone worked this with async and v 0.5.0-dev (as of this writing)? 
+
+I tried implementing the same mechanism suggested by @nicholasday but I wasn't able to do it. 
+
+Here's my Fair:
+
+```rust
+#![feature(proc_macro_hygiene, decl_macro)]
+#[macro_use]
+extern crate rocket;
+
+mod mongo;
+use rocket::http::{ContentType, Header, Method};
+use rocket::{Request, Response};
+use std::io::Cursor;
+use std::str::FromStr;
+
+use rocket::fairing::{Fairing, Info, Kind};
+use rocket_cors::{AllowedMethods, AllowedOrigins, CorsOptions};
+
+pub struct CORS;
+
+#[rocket::async_trait]
+impl Fairing for CORS {
+    fn info(&self) -> Info {
+        Info {
+            name: ""Add CORS headers to responses"",
+            kind: Kind::Response,
+        }
+    }
+
+    async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
+        println!(""Setting access control allow origin"");
+        response.set_header(Header::new(""Access-Control-Allow-Origin"", ""*""));
+        response.set_header(Header::new(
+            ""Access-Control-Allow-Methods"",
+            ""POST, GET, PATCH, OPTIONS"",
+        ));
+        response.set_header(Header::new(""Access-Control-Allow-Headers"", ""*""));
+        response.set_header(Header::new(""Access-Control-Allow-Credentials"", ""true""));
+  
+    }
+}
+
+#[get(""/"")]
+async fn index() -> &'static str {
+    ""Hello, world!""
+}
+
+#[post(""/test"")]
+async fn testing() -> &'static str {
+    let r = mongo::create().await;
+    return ""Bibibiii"";
+}
+/**
+ * This is the Rocket file
+ */
+
+#[launch]
+fn rocket() -> _ {
+    rocket::build()
+        .attach(CORS)
+        .mount(""/"", routes![index, testing])
+}
+
+```
+
+I'm still getting hit by:
+```
+Access to fetch at 'http://localhost:8000/test' from origin 'http://localhost:8080' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: It does not have HTTP ok status.
+```
+
+![image](https://user-images.githubusercontent.com/8230270/117831314-6f4f8480-b242-11eb-8371-d2b547069aff.png)
+
+
+I even opened a Stack Overflow question:
+https://stackoverflow.com/questions/67478789/how-do-i-enable-cors-in-rust-rocket-v-0-5?noredirect=1#comment119270650_67478789
+
+This helped me do it when I was using sync:
+https://stackoverflow.com/questions/62412361/how-to-set-up-cors-or-options-for-rocket-rs/64904947?noredirect=1#comment119272533_64904947
+
+I even tried using the master branch version of `rocket_cors` but it didn't work. 
+
+Just for reference, here's my `cargo.toml`
+
+```
+
+[dependencies]
+rocket = ""0.5.0-dev""
+rocket_cors = ""0.5.2""
+mongodb = ""2.0.0-alpha.1""
+
+
+[dependencies.rocket_contrib]
+version = ""0.5.0-dev""
+default-features = false
+features = [""diesel_postgres_pool"", ""json""]
+
+[patch.crates-io]
+rocket = { git = 'https://github.com/SergioBenitez/Rocket', branch = ""master"" }
+rocket_contrib = { git = 'https://github.com/SergioBenitez/Rocket', branch = ""master"" }
+rocket_cors = { git = ""https:
+```
+",25,2021-05-11T14:22:14Z,0
+57,hwoodiwiss,"@superjose I know this is quite old, but I think the problem you're having is because you don't have an ```#[options(""<ENDPOINT>"")]``` for each endpoint, meaning your options requests are receiving a non-successful response, 404. 
+The browser then likely ignores any CORS headers in the non-successful response.",25,2021-12-05T00:27:34Z,0
+58,superjose,Ooohhh I see @hwoodiwiss !!! Thank you very much!!! What I ended up doing was rerouting my front-end so it uses a proxy instead. Thanks for the help!!!,25,2021-12-05T12:18:01Z,0
+59,shaoxp,"> 
+
+I met exact the same problem. the options request got a 404 response. i am still not clear how to add OPTIONS support. 
+it seems someone said rocket_cors may help, but i seems can not use it with 0.5-rc. 
+",25,2021-12-29T02:14:27Z,0
+60,MCOfficer,"> > 
+> 
+> I met exact the same problem. the options request got a 404 response. i am still not clear how to add OPTIONS support. it seems someone said rocket_cors may help, but i seems can not use it with 0.5-rc.
+
+You need to use their git branch for 0.5-rc, see https://github.com/SergioBenitez/Rocket/issues/1701",25,2021-12-29T13:30:04Z,0
+61,jebrosen,"You mentioned a `Responder`, but the linked serde issue is about the opposite direction (`Deserialize`). Which one are you trying to handle?
+
+That being said, the implementations for both `FromData` and `Responder` for [`rocket_contrib::json::Json`](https://api.rocket.rs/v0.4/rocket_contrib/json/struct.Json.html) just call the JSON (de)serialization functions in `serde_json`. So anything you customize related to `Serialize` or `Deserialize` will work just as well when called from rocket.",1193,2019-12-24T19:05:03Z,0
+62,cars10,"Sorry, my mistake. I specifically have this problem when a user *sends* data to my rocket api. So in the above text i should have talked about `FromData` and not `Responder`, i fixed that :)
+
+I was simply wondering if there is a built-in or easier way to do that instead of implementing my own struct, because i think this is a common problem. (A standard rails app for example treats both json objects differently, thats why i am trying to reproduce that behavior.)
+",1193,2019-12-25T10:29:10Z,0
+63,jebrosen,"In that case, the solution in https://github.com/serde-rs/serde/issues/984#issuecomment-314143738 would work. Since the behavior of `Json` is currently just to do what `Deserialize` does, adding such functionality to rocket directly would likely need a pretty large change.
+
+EDIT: Closing, since there is a suggested solution in `serde`.",1193,2019-12-26T06:32:02Z,0
+64,cars10,Thanks :),1193,2019-12-26T11:44:26Z,0
+65,oren0e,"In my case I have 2 structs - one for the request and one internal to the business logic - the reason being exactly because some fields can be missing, so the difference is that the request struct has everything in `Option`s.
+
+It will be really helpful to have the ability to return something other than `Self` in the `from_data()` method. So Ideally:
+```rust
+impl FromDataSimple for MyStructRequest {
+    type Error = MyError;
+
+    fn from_data(req: &Request, data: Data) -> data::Outcome<MyStruct, Self::Error> {
+```
+In this way I can make the conversion `MyStructRequest -> MyStruct` internally within the function.",1193,2021-12-29T17:50:05Z,0
+66,IniterWorker,"Hi @veritem
+
+Could you share more detail about the location of this link (button, link, page, ...)?
+
+Thank you,
+
+B. r",2047,2022-01-03T16:41:56Z,0
+67,veritem,"I just searched `guard` and the first link came broken
+![image](https://user-images.githubusercontent.com/53856673/147957173-7cc0c0ae-30e3-4696-bbc1-9b1683b3c446.png)
+",2047,2022-01-03T16:54:35Z,0
+68,IniterWorker,Related to : #1737 ,2047,2022-01-03T20:34:23Z,0
+69,IniterWorker,Related to: #1965 ,2039,2022-01-03T20:40:40Z,0
+70,jebrosen,"I added most of those comments to the top-level comment as additional TODOs, and will keep working through them along with the other inline comments.
+
+
+>     * The `trace_env_logger` example needs some motivation. Is it just there to
+>       check that `log` integration ""works""?
+
+I believe it was, yes. That, and/or as a demonstration to users how Rocket's and users's `tracing` messages look as viewed by a `log`-based logger. @hawkw ?
+
+>     * In some places, tracing fields come before the message and sometimes after.
+>       We should be consistent. `trace!(""msg"", field = foo);`
+
+The order is not flexible in that way: `info!(field = value ..., ""format"", arguments)` or `info_span!(""span_name"", field = value ..., ""format"", arguments)`. I think this is a actually a consequence of:
+
+>     * Why add a name to some spans and not others? What is the utility? Can we
+>       just use `module_name!()` or something to that effect?
+
+*Every* span has a name. I mixed several of these up very early on, which now look like they have only a message, and never cleaned them all up.
+
+>     * Running arbitrary, non-trace related code `in_scope()` feels quite wrong to
+>       me. There must be a better way.
+
+Earlier versions of this PR did use the [`Span::enter`](https://docs.rs/tracing/0.1.25/tracing/span/struct.Span.html#method.enter) API in more places, which returns a guard that exits the span when `Drop`ped. However, the API depends on having some sort of task-local or thread-local state, which hasn't been nicely solved for `async/await` and is easy to misuse accidentally (see caveats in documentation). `in_scope()` is much more difficult to use in an incorrect way.
+
+I do agree that some of the `in_scope` calls would be better as `enter()`, so that's also on the top-level todo list now.",1579,2021-03-20T20:23:45Z,0
+71,hawkw,"Answering some of the questions from above:
+
+@jebrosen 
+> I believe it was, yes. That, and/or as a demonstration to users how Rocket's and users's `tracing` messages look as viewed by a `log`-based logger. @hawkw ?
+
+Yeah, that's correct; the example was supposed to demonstrate how to use Rocket with the `log` ecosystem. I thought this was valuable to provide for users who might already have a preferred `log` logger that they want to continue to use. It's probably not hugely important to provide an example of this, but I thought it's better to have more examples when possible?
+
+@SergioBenitez 
+>   * Running arbitrary, non-trace related code `in_scope()` feels quite wrong to
+>     me. There must be a better way.
+
+Running ""arbitrary, non-trace related code"" in `in_scope` is actually an intended use of the API; see [the documentation](https://docs.rs/tracing/0.1.25/tracing/span/index.html#entering-a-span) for details. In general, correct use of `tracing` places any code that's part of the logical unit of work or context represented by a span _inside_ that span --- this allows spans to be used not only for providing context to log messages, but also for timing code sections or for distributed tracing. 
+
+@jebrosen 
+> >
+> > * In some places, tracing fields come before the message and sometimes after.
+> >   We should be consistent. `trace!(""msg"", field = foo);`
+> >
+> 
+> The order is not flexible in that way: `info!(field = value ..., ""format"", arguments)` or `info_span!(""span_name"", field = value ..., ""format"", arguments)`. 
+
+Yeah, this is correct.  Format-string-based messages must always come last in the `tracing` macros, as the macros must parse them as any number of arbitrary token trees in order to pass them to `format_args!`. Spans always have names, which are string literals that come first in the macro invocation, and may optionally have format string messages at the *end* of the macro invocation.
+
+@SergioBenitez 
+> * What is the overhead this is adding? This is now in the critical path. If we
+>   could really disable the feature, resulting in trace macro calls compiling
+>   to nothing, we should be able to measure this accurately.
+
+See [here](https://docs.rs/tracing/0.1.25/tracing/level_filters/index.html#compile-time-filters) for details on statically disabling specific `tracing` levels, or _all_ traces, at compile-time. :)
+
+Since the compile-time filtering is based on feature flags, which are always additive, a library dependency like Rocket should generally not enable them, since this prevents the user application from being able to configure them. However, we might want to document the existence of these feature flags in Rocket's docs so that users are aware of them, and they can be used for benchmarking.
+
+",1579,2021-04-05T21:26:49Z,0
+72,hawkw,"> * ~The `rocket` library feature should be called `tracing` or similar.~ I see now that the `log` feature is for enabling compatibility with the `log` crate. It does not appear that we can disable tracing at all. What kind of compile-time overhead are we adding? What kind of runtime overhead are we adding?
+> 
+> * ~Is the feature intended to be disabled? If so,~ it should be documented in
+>   `lib.rs`, ~be added as a tested feature in `scripts/test.sh`, and explicitly
+>   enabled in examples that make use of it. If not, why is it a feature at all?
+>   At the moment, codegen seem to depend on this being enabled, so either this
+>   should be fixed or it shouldn't be a feature.~
+
+It would also definitely be possible to make the `tracing` dependency itself optional. To do this, we would need to wrap the macros with Rocket's own macros that expand to nothing when the feature flag is disabled. I didn't do this since `tracing`'s compile-time filtering is sufficient to avoid runtime overhead, and it was a lot of extra code. However, this *would* allow us to avoid downloading and compiling the `tracing` dependency when it's not in use.",1579,2021-04-05T21:33:01Z,0
+73,oren0e,"Hi, any news about when should we expect the move to `tracing` to be completed? I was just trying to do something related in https://github.com/SergioBenitez/Rocket/issues/982, i.e., insert a request_id to monitor the full cycle of a request-response. Currently I have to setup a custom subscriber and formatting layer like:
+```rust
+    LogTracer::init().expect(""Unable to setup log tracer!"");
+
+    let (non_blocking_writer, _guard) = tracing_appender::non_blocking(std::io::stdout());
+    let formatting_layer = fmt::layer().json().with_writer(non_blocking_writer);
+    let subscriber = Registry::default()
+        .with(EnvFilter::new(env!(""LOG_LEVEL"")))
+        .with(formatting_layer);
+    tracing::subscriber::set_global_default(subscriber).expect(""Failed to set global subscriber"");
+
+    rocket_builder().launch();
+```
+Which is not ideal because it interferes with rocket's logging configuration and then I end up getting ugly jsons with terminal color codes in raw form, which look like the following:
+```json
+{""timestamp"":""2022-01-06T10:23:04.323575Z"",""level"":""INFO"",""fields"":{""message"":""\u001b[1;49;39mOutcome:\u001b[0m \u001b[49;32mSuccess\u001b[0m"",""log.target"":""_"",""log.module_path"":""rocket::rocket"",""log.file"":""/Users/me/.cargo/registry/src/github.com-1ecc6299db9ec823/rocket-0.4.10/src/rocket.rs"",""log.line"":303},""target"":""_""}
+```
+And notice that I don't have a request_id here as well for some reason...",1579,2022-01-06T10:35:13Z,0
+74,somehowchris,"Ok fair point, Sergio the maintainer of the project is off due to personal matters, just trying to add some points for discussions.
+
+* the `includeSubDomains` directive and the `hstspreload list` are related though not the same, the preload list isn’t an official spec but used by basically all browsers
+* running that on a subdomain will only give you the opportunity to have hsts enabled on further subdomains (`my-page.example.com` => `*.my-page.example.com`)
+* serving this directive on a subdomain will be excluded for the `preload list` as it would need to be served at the hosts domain
+* I don’t see a direct disadvantage to have it but would love to see a flag, in some cases http traffic is still needed on subdomains, would default to true with an optional Boolean to set it to false. Basically an `opt-out`
+* __Please add it to the documentation__",2049,2022-01-06T04:41:31Z,0
+75,Soham3-1415,"Yeah, because the HSTS preload list is not an official spec, it is tricky to definitively say what is ""correct"". However, I am not aware of any other preload list that relies on the preload directive. I think the best solution depends on what the intent of this option is. I think clarifying the documentation to address this is necessary.
+
+What follows is based on the assumption that this option is intended to conform to the requirements of the preload list at https://hstspreload.org:
+
+> serving this directive on a subdomain will be excluded for the preload list as it would need to be served at the hosts domain
+
+Yes, I think the preload list directive is only useful if you are serving the header at the hosts domain, but it was not entirely clear to me what this means. I am unsure if, for example, one can add `example.co.uk` to the preload list.
+
+> running that on a subdomain will only give you the opportunity to have hsts enabled on further subdomains (my-page.example.com => *.my-page.example.com)
+
+You cannot get onto the preload list without the `includeSubDomains` directive, so even though it is a separate directive, it is a prerequisite to use `preload` effectively. Thus, it is not possible to have HSTS disabled on subdomains and also be on the preload list. These are conflicting intentions.
+
+> I don’t see a direct disadvantage to have it but would love to see a flag, in some cases http traffic is still needed on subdomains, would default to true with an optional Boolean to set it to false. Basically an opt-out
+
+As the preload list exists now and has for some time, `includeSubDomains` is a requirement, and while I agree that a flag would certainly add configurability, I think it is only useful in the case that the preload list requirements change or if another preload list with different requirements is desired. Whether this is worth doing or not is certainly debatable.
+
+I think right now, the current expectation is for compatibility with the Chromium preload list form, and as such, the current header is a bug. Maybe adding a flag would be better as an additional feature?
+
+",2049,2022-01-06T18:49:48Z,0
+76,somehowchris,"* Host domain means `example.com`. If you are serving this on `api.example.com` it will not be added to the hstspreload-list.
+* `includeSubDomains` is deffinitly not a requirement as companies like WhatsApp or Ticktock still have apis over casual http (these are some public examples but I am certain there are a lot more)
+* Including this by default with no option to overwrite it will shatter some business setups. Yes the preload list is only for public websites but again, it isn't an official spec but `includeSubDomains` is. Adding this directive would crush setups on internal networks for servers on internal subdomains which servers do not use tls
+
+
+Again, I advocate for adding this but with the option to disable it",2049,2022-01-06T20:40:05Z,0
+77,Soham3-1415,"I am not disputing that `includeSubdomains` is not always desirable. I 100% agree with you there. I am simply quoting the requirements on the HSTS preload list submission form.
+
+> The includeSubDomains directive must be specified.
+
+The host domain is the only one that needs that preload directive if you want to enable preload. If you enable preload, that HSTS header must also have the `includeSubDomains` directive. `whatsapp.com` is on the preload list. `whatsapp.com` also has `includeSubDomains`. `tiktok.com` does not have HSTS and is not on the preload list.
+![poc1](https://user-images.githubusercontent.com/17441466/148468137-68437f00-2932-424b-885e-b01ca0add467.png)
+![poc2](https://user-images.githubusercontent.com/17441466/148468143-00806f44-56c5-4f08-ad56-22bbb38af9d6.png)",2049,2022-01-06T23:46:57Z,0
+78,somehowchris,"Weird, just listened to some tech talk from some engineers at whatsapp and ticktok but anyway. That's just an example not the point.
+
+Still, if you could update your PR with the docs needed and the optional overwrite would be awesome.
+
+And in the end, the word of @SergioBenitez counts",2049,2022-01-07T11:49:51Z,0
+79,Soham3-1415,"If I changed `Hsts::Preload(Duration)` to `Hsts::Preload(Duration, bool)`, that's a breaking change. Do we want it to be a breaking change? To avoid breaking the API, I think another variant could be added. Is there a better way to do this?",2049,2022-01-07T12:49:54Z,0
+80,somehowchris,"I may have a bit of a different opinion on that. Rust is type heavy, we have cargo for versioning and rustc will tell you whats wrong. As long as the stuff is clearly documented and semantic it shouldn't be that much of a braking change. 
+
+Yes it will break compilation due to rusts heavy type checking but it doesn't brake functionality",2049,2022-01-08T04:23:00Z,0
+81,Soham3-1415,I've updated the PR with documentation changes and an added flag.,2049,2022-01-08T13:36:12Z,0
+82,somehowchris,"You could use the type `(Status, Json<MyCustomErrorStruct>)` as an error type of a `Result`",2061,2022-01-09T20:13:47Z,0
+83,eltiare,"This is the result type: 
+
+```
+pub type Result<'r> = std::result::Result<Response<'r>, crate::http::Status>;
+```
+
+It does not accept a tuple, it only accepts a `Status`.",2061,2022-01-09T20:32:54Z,0
+84,somehowchris,You mean like [that](https://github.com/somehowchris/rocket-tracing-fairing-example/blob/main/src/main.rs#L121) shouldn't work?,2061,2022-01-09T22:03:37Z,0
+85,eltiare,I'm talking about responders: https://rocket.rs/v0.5-rc/guide/responses/#responder,2061,2022-01-09T22:41:56Z,0
+86,somehowchris,"Ok, your example isn‘t mentioned until [`Implementations`](https://rocket.rs/v0.5-rc/guide/responses/#strings) and what I provided you was an implementation of [wrapping](https://rocket.rs/v0.5-rc/guide/responses/#wrapping). May I ask for a concrete example? Couldn't reproduce yet",2061,2022-01-09T22:50:47Z,0
+87,eltiare,"Return an instance of `ResponderExample` from a handler function as a successful result.
+
+```
+pub struct ResponderExample;
+
+impl<'r, 'o: 'r> Responder<'r, 'o> for ResponderExample {
+    fn respond_to(self, _req: &'r Request<'_>) -> rocket::response::Result<'o> {
+        let body = ""It worked!"";
+        Ok(Response::build()
+            .status(Status::UnprocessableEntity)
+            .sized_body(body.len(), Cursor::new(body))
+            .finalize())
+    }
+}
+```",2061,2022-01-10T02:00:40Z,0
+88,somehowchris,"Well your example just works like intended.
+
+```rust
+// main.rs
+#[macro_use]
+extern crate rocket;
+
+use std::io::Cursor;
+use rocket::Response;
+use rocket::Request;
+use rocket::response::Responder;
+use rocket::http::Status;
+
+pub struct ResponderExample;
+
+impl<'r, 'o: 'r> Responder<'r, 'o> for ResponderExample {
+    fn respond_to(self, _req: &'r Request<'_>) -> rocket::response::Result<'o> {
+        let body = ""It worked!"";
+        Ok(Response::build()
+            .status(Status::UnprocessableEntity)
+            .sized_body(body.len(), Cursor::new(body))
+            .finalize())
+    }
+}
+
+#[get(""/"")]
+fn test() -> ResponderExample {
+    ResponderExample{}
+}
+
+#[launch]
+fn rocket() -> _ {
+    rocket::build().mount(""/"", routes![test])
+}
+```
+
+Òutputs:
+```sh
+curl -v http://0.0.0.0:8000/
+*   Trying 0.0.0.0:8000...
+* TCP_NODELAY set
+* Connected to 0.0.0.0 (127.0.0.1) port 8000 (#0)
+> GET / HTTP/1.1
+> Host: 0.0.0.0:8000
+> User-Agent: curl/7.68.0
+> Accept: */*
+> 
+* Mark bundle as not supporting multiuse
+< HTTP/1.1 422 Unprocessable Entity
+< server: Rocket
+< x-frame-options: SAMEORIGIN
+< x-content-type-options: nosniff
+< permissions-policy: interest-cohort=()
+< content-length: 10
+< date: Mon, 10 Jan 2022 10:33:34 GMT
+< 
+* Connection #0 to host 0.0.0.0 left intact
+It worked!
+```",2061,2022-01-10T10:35:00Z,0
+89,eltiare,"Is this on the latest or on rc-1? I'm getting back the default catcher response on rc-1. I was running into all sorts of weird issues when I tried the git repo, so I wasn't able to test there.",2061,2022-01-10T14:46:20Z,0
+90,somehowchris,Yes https://github.com/somehowchris/rocket-tracing-fairing-example/blob/main/Cargo.toml#L9,2061,2022-01-10T14:58:00Z,0
+91,eltiare,"I apologize, I made a rookie mistake and wasn't watching the logs. The 422 error was due to the dataguard failing and not my response.",2061,2022-01-10T15:30:55Z,0
+92,svenstaro,This would be great to have. I'm currently trying to integrate Sentry but there's no single future I can call to attach the Hub to via `bind_hub()` so the integration is very lackluster right now. Also for tracing this would be really nice to have.,1820,2022-01-12T07:23:08Z,0
+93,jebrosen,"Glancing at https://crates.io/search?q=opentracing I don't see any opentracing middleware for Rocket, and the Rust libraries for opentracing itself look stale.
+
+If you or anyone else were to implement it in a resuable way, it might be accepted into `rocket_contrib`. But it will likely be easier for it get more traction as a separate crate first, similarly to `rocket_cors`.",982,2019-04-30T02:20:40Z,0
+94,SergioBenitez,"Exactly as @jebrosen states. Happy to accept a PR, but it's not something the project itself should take on. As such, closing out.",982,2019-05-16T01:23:35Z,0
+95,oren0e,"Did anyone do something? I'm in a desperate need of something that will attach requestIDs to rocket status responses etc.
+I might try to implement something myself, but I just need some guidelines like how can I access the default rocket logger etc.",982,2022-01-04T21:57:04Z,0
+96,somehowchris,"@oren0e I'm not an expert on that but since Sergio is off due to personal matters let me try to help out.
+
+[Fairings](https://rocket.rs/v0.5-rc/guide/fairings/) are kind of middleware steps. You can mutate responses and look into requests. Tough I am not aware of any rewuest-ids stored in rocket.",982,2022-01-05T13:05:00Z,0
+97,oren0e,"Thanks. about the request ids, they will probably need to be created.
+But I am not sure - does the middleware should replace the native logging sort of like in tracing-actix-web crate for actix-web? ",982,2022-01-05T13:24:55Z,0
+98,somehowchris,"I never used actix, so what you mean with `replaces the native logging`?",982,2022-01-05T13:38:54Z,0
+99,oren0e,"I never used actix as well, but I know it's pretty similar to rocket so I figured that I might take a look at the library in order to get some ideas for how to implement a similar middleware for rocket.
+From the crate, `middleware.rs` doc strings:
+```rust
+/// `TracingLogger` is a middleware to capture structured diagnostic when processing an HTTP request.
+/// Check the crate-level documentation for an in-depth introduction.
+///
+/// `TracingLogger` is designed as a drop-in replacement of [`actix-web`]'s [`Logger`].
+```",982,2022-01-05T14:11:42Z,0
+100,oren0e,Bottom line of what I'm trying to say is that if someone from the rocket team is willing to help me writing this fairing then I'll try to tackle this.,982,2022-01-05T14:14:20Z,0
+101,oren0e,"I've done some reading about fairings and I think the minimum satisfying implementation comes down to enriching the Request with a `request_id` that was created in a `tracing` span, so that responses like 400, 200, 500 etc. will have an id that can be traced to the original span in which it was created. ",982,2022-01-05T15:40:25Z,0
+102,somehowchris,"Well the `this.service.call(fut)` in the `TracingLoggerMiddleware` of tracing-actix-web can’t be translated 1:1 in rocket. What you could use instead in Rocket is the [`request-local-cache`](https://api.rocket.rs/v0.5-rc/rocket/fairing/trait.Fairing.html#request-local-state) feature, storing and then retrieving the span. 
+
+Is there a need of the `Logger` as it seems to me that this is an actual stdout logger, does it have something to do with `opentracing`?",982,2022-01-05T15:44:07Z,0
+103,oren0e,"I read about `request-local-cache` and it's not clear to me how do I retrieve something from the cache. My idea was:
+```rust
+#[derive(Clone, Copy, Debug)]
+pub struct RequestId(Uuid);
+
+impl RequestId {
+    pub(crate) fn generate() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+pub struct RequestIdFairing;
+
+impl Fairing for RequestIdFairing {
+    fn info(&self) -> Info {
+        Info {
+            name: ""Request ID Attacher"",
+            kind: Kind::Request | Kind::Response,
+        }
+    }
+
+    fn on_request(&self, request: &mut Request, _: &Data) {
+        request.local_cache(|| RequestId::generate());
+    }
+
+    fn on_response(&self, request: &Request, response: &mut Response) {
+        let request_id = request.local_cache(|| RequestId); // it's not clear what should I specify here to retrieve the request_id I've stored in the on_request method
+        response.set_raw_header(""request_id"", request_id.0);
+    }
+}
+```
+So the Idea with this fairing is that every request will get a request_id attached and then, in response, will retrieve this id and attach it to the response as well. But it's not working currently because clearly the retrieval is wrong:
+```
+error[E0609]: no field `0` on type `&fn(uuid::Uuid) -> RequestId {RequestId}`
+```
+
+I think after this works, there is indeed no need for a logger, but just to connect it to a tracing subscriber somehow.",982,2022-01-05T23:56:07Z,0
+104,oren0e,"Well, I've made it work with this:
+```rust
+pub struct RequestIdFairing;
+
+impl Fairing for RequestIdFairing {
+    fn info(&self) -> Info {
+        Info {
+            name: ""Request ID Attacher"",
+            kind: Kind::Request | Kind::Response,
+        }
+    }
+
+    fn on_request(&self, request: &mut Request, _: &Data) {
+        request.local_cache(|| RequestId::generate());
+    }
+
+    fn on_response(&self, request: &Request, response: &mut Response) {
+        let request_id = request.local_cache(|| RequestId::generate());
+        response.set_raw_header(""request_id"", request_id.0.to_string());
+    }
+}
+```
+I also have a request guard with `FromRequest` implemented which takes the RequestId from cache, but I am still not satisfied because I get only one log line (the response headers) with a requestID where what I want is a requestID next to each Status response logged (like 200 OK, 400 BadRequest etc.)",982,2022-01-06T01:05:49Z,0
+105,somehowchris,Due to some further questions and comment I have created the following repository https://github.com/somehowchris/rocket-tracing-fairing-example might it be of any help?,982,2022-01-07T13:33:00Z,0
+106,oren0e,"> Due to some further questions and comment I have created the following repository https://github.com/somehowchris/rocket-tracing-fairing-example might it be of any help?
+
+Thanks, the repo is helpful indeed. I posted an issue there.",982,2022-01-08T11:01:15Z,0
+107,ZackMattor,@somehowchris thanks so much for putting that together! I've been recently working on instrumenting a high throughput rocket frontend and have had issues with tracing the async tasks without having access to the root spans. At a quick glance i'm not sure if your method will solve what I was seeing but i'll probably poke at it a bit sometime soon.,982,2022-01-13T18:36:15Z,0
+108,kybishop,You'll need to use a crate that impliments http requests; outbound requests are out of the scope of rocket. [Reqwest](https://github.com/seanmonstar/reqwest) is great for this.,250,2017-04-05T21:31:14Z,0
+109,SergioBenitez,"At this time, Rocket only provides an HTTP server and not a client. As mentioned by @kybishop, you can use other libraries, such as [reqwest](https://github.com/seanmonstar/reqwest), to accomplish this.",250,2017-04-06T02:31:20Z,0
+110,alper,"I can't figure out the signature, Rocket does not seem to like this: `fn gmap() -> Result<String, reqwest::Error> {`",250,2022-01-15T11:38:04Z,0
+111,somehowchris,If you implement the type `Responder` for each of the types it’s going to work,250,2022-01-15T17:48:57Z,0
+112,alper,"This is what the documentation says:
+
+> If the error type E does not implement Responder, then the error is simply logged to the console, using its Debug implementation, and a 500 error is returned to the client.
+
+I can't really square that with having to implement Responder for this.",250,2022-01-15T18:45:45Z,0
+113,blackghost1987,"I'm not really sure why we have this conversation going in two places at once, but I'm copying the result of my investigation here from https://github.com/SergioBenitez/Rocket/discussions/2068
+```
+In Rocket v0.5, `Result<T, E>` implements `Responder` only if `E` implements `Responder`.
+For the previous behavior, use `Result<T, Debug<E>>` where `Debug` is `rocket::response::Debug`.""
+```
+I think this issue should not be continued further, this problem is mostly unrelated to the original issue, which should have been a discussion anyway.",250,2022-01-15T20:45:49Z,0
+114,beemstream,"This can happen due to spawning too many async tasks and not completing them properly, its hard to tell without seeing the implementation, In my case, I had used an async HTTP client library that would spawn a new async client on every request when actually it should create the HTTP client once and use that.",2031,2022-01-03T10:47:45Z,0
+115,FrankenApps,"Well then I could only guess, that it might be related to `mysql_async` instead but I am not sure. I set up the server like so
+```rust
+let pool = mysql_async::Pool::new(url);
+
+let cors = rocket_cors::CorsOptions {
+        allowed_origins: rocket_cors::AllowedOrigins::All,
+        allowed_methods: vec![
+            rocket::http::Method::Get,
+            rocket::http::Method::Delete,
+            rocket::http::Method::Post,
+        ]
+        .into_iter()
+        .map(From::from)
+        .collect(),
+        allowed_headers: rocket_cors::AllowedHeaders::All,
+        allow_credentials: true,
+        ..Default::default()
+    }
+    .to_cors()?;
+
+let mut config = Config::default();
+config.address = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+config.port = 8080;
+
+rocket::custom(config)
+        .manage(pool)
+        // Handle routing errors.
+        .register(""/"", catchers![not_found])
+        // This catches all **CORS** preflight requests and handles them.
+        .mount(""/"", rocket_cors::catch_all_options_routes())
+        .mount(
+            ""/mypath"",
+            FileServer::from(relative!(""mypath"")),
+        )
+        .manage(cors)
+        // Some more routes are mounted here (GET, POST, UPDATE, DELETE, etc.)...
+        .launch()
+        .await?;
+```
+and then I reuse the pool whenever I need to get data from the database like this
+```rust
+#[get(""/my/route"")]
+pub async fn my_route(pool: &State<Pool>) -> content::Json<String> {
+    let mut conn = pool
+        .get_conn()
+        .await
+        .expect(""Failed to get a connection from the MySQL access pool."");
+    let data = crate::database::data::get_some_data(&mut conn)
+        .await
+        .expect(""Failed to load data from database."");
+
+    let json = to_string(&data).expect(""Failed to parse data as JSON."");
+    content::Json(json)
+}
+```
+
+**Is there any reasonable method to debug these async clients?**
+
+Oddly there do not even seem to be requests to the server when it crashes. Here is the access log from the nginx reverse proxy:
+```
+- - [08/Jan/2022:07:28:58 +0100] ""GET / HTTP/1.0"" 200 612 ""http://fonlove.com/"" ""Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.72 Safari/537.36""
+- - [08/Jan/2022:07:29:33 +0100] ""\x03\x00\x00/*\xE0\x00\x00\x00\x00\x00Cookie: mstshash=Administr"" 400 166 ""-"" ""-""
+- - [08/Jan/2022:07:29:33 +0100] ""\x03\x00\x00/*\xE0\x00\x00\x00\x00\x00Cookie: mstshash=Administr"" 400 166 ""-"" ""-""
+- - [08/Jan/2022:07:31:51 +0100] ""GET /2.php HTTP/1.1"" 404 197 ""http://fonlove.com/2.php"" ""Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1)""
+- - [08/Jan/2022:07:31:57 +0100] ""GET /2.php HTTP/1.1"" 404 197 ""http://fonlove-berlin.com/2.php"" ""Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1)""
+- - [08/Jan/2022:07:55:59 +0100] ""GET / HTTP/1.1"" 200 396 ""-"" ""python-requests/2.26.0""
+- - [08/Jan/2022:07:58:45 +0100] ""GET / HTTP/1.1"" 200 612 ""-"" ""Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36""
+- - [08/Jan/2022:08:01:39 +0100] ""GET / HTTP/1.1"" 200 396 ""-"" ""Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) Project-Resonance (http://project-resonance.com/) (KHTML, like Gecko) Chrome/83.0.4103.61 Safari/537.36""
+- - [08/Jan/2022:08:04:59 +0100] ""GET / HTTP/1.1"" 200 396 ""-"" ""Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36""
+- - [08/Jan/2022:08:09:15 +0100] ""GET / HTTP/1.1"" 200 396 ""-"" ""Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.113 Safari/537.36""
+- - [08/Jan/2022:08:14:45 +0100] ""GET / HTTP/1.1"" 200 612 ""-"" ""NetSystemsResearch studies the availability of various services across the internet. Our website is netsystemsresearch.com""
+- - [08/Jan/2022:08:28:50 +0100] ""GET /.env HTTP/1.1"" 404 197 ""-"" ""Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.129 Safari/537.36""
+- - [08/Jan/2022:08:32:25 +0100] ""GET / HTTP/1.1"" 200 396 ""-"" ""page-preview-tool Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.132 Safari/537.36""
+- - [08/Jan/2022:08:40:21 +0100] ""POST /cache.php HTTP/1.1"" 404 134 ""-"" ""Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:66.0) Gecko/20100101 Firefox/66.0""
+- - [08/Jan/2022:08:53:16 +0100] ""GET /.env HTTP/1.1"" 404 197 ""-"" ""Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.129 Safari/537.36""
+- - [08/Jan/2022:08:53:17 +0100] ""POST / HTTP/1.1"" 405 568 ""-"" ""Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.129 Safari/537.36""
+- - [08/Jan/2022:08:57:15 +0100] ""GET / HTTP/1.1"" 200 396 ""-"" ""Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36""
+- - [08/Jan/2022:09:35:01 +0100] ""GET /robots.txt HTTP/1.1"" 404 134 ""-"" ""Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)""
+- - [08/Jan/2022:09:35:02 +0100] ""GET / HTTP/1.1"" 200 396 ""-"" ""Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)""
+- - [08/Jan/2022:10:04:24 +0100] ""\x16\x03\x01\x00\xE3\x01\x00\x00\xDF\x03\x03\xCC\x022\x08\x00?\xFAKC#\x15>hgKd\xEC\x89\x800'5\x02\xED\xA5\xECj\x1F\xFB\xDDJ\x9A\x00\x00h\xCC\x14\xCC\x13\xC0/\xC0+\xC00\xC0,\xC0\x11\xC0\x07\xC0'\xC0#\xC0\x13\xC0\x09\xC0(\xC0$\xC0\x14\xC0"" 400 166 ""-"" ""-""
+- - [08/Jan/2022:11:06:45 +0100] ""\x16\x03\x01\x00\xEE\x01\x00\x00\xEA\x03\x03\xBE\xBF&\xE6\xB3\x85?\xBA\xB9>\xF4\x85\xEB1\x1AI\x06<\xFA\xCF\x86\xCC\xA9\xAA\xB0\xD6k|\x8E\x99\x81\xA2 bo\xD2\xA9\xD3\xEE\xD8[\xF3{E\x04\x85\xEA\x8F}#\xB2\xF7\x07"" 400 166 ""-"" ""-""
+- - [08/Jan/2022:11:06:45 +0100] ""GET / HTTP/1.1"" 200 396 ""-"" ""Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4 240.111 Safari/537.36""
+- - [08/Jan/2022:11:11:37 +0100] ""GET /config/getuser?index=0 HTTP/1.1"" 404 134 ""-"" ""Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:76.0) Gecko/20100101 Firefox/76.0""
+- - [08/Jan/2022:11:21:06 +0100] ""\x01\x00\x00\x00 \xBF\x02\x00\x88\x13\x00\x00\x87\x00\x00\x00NIMABIJIAN\x04\x03\x00\x00{\x99Caig\x9C\x03\xC7eB\xC5\x09\xC1\x18a\x11\x1A\x91\x1F\x02\x09cof\x91\xC0\x80sJ5\xD2\x80\xE6\x9A~\xB9\xC7\x83^\x96\xEEN\x16\x96\x96&\xE6\x03\xEA\xBC\x81\x02=\xAC\x10\xFA?7\x03\xC3\xDF\xF7\xE4\x98`p\xE6\x8D\xC1\xA9\x8D\xC6\x06\xDB\xAF\x91\xE7\x82s\xF7\x14H\xD4\xE1W\x9A\x93C\x9E]\xA4\x01#\x03#\x03]\x03c]CC\x05C\x03+S\x03b\xF4\x00\x00/\x9E\x16E"" 400 166 ""-"" ""-""
+- - [08/Jan/2022:11:21:16 +0100] ""\x16\x03\x01\x00\xEE\x01\x00\x00\xEA\x03\x03\x1C\x85SB\x8F\xD5R\xB6RJ\xD1Q\xD0\x96D\xF2\xBBRU\xE1\xC1\xCD\xAD\xCB[\xAE&\xA0\xB8g\xB8\xD7 \x11\xC2\x0C\xF6\xB97mU5\xBE\xB1M\xDD7>\xFF\xC6\x9EU/\xA0#\xF0\xE6$\x92\x92i<~k \x00&\xC0+\xC0/\xC0,\xC00\xCC\xA9\xCC\xA8\xC0\x09\xC0\x13\xC0"" 400 166 ""-"" ""-""
+- - [08/Jan/2022:11:21:17 +0100] ""\x16\x03\x01\x00\xEE\x01\x00\x00\xEA\x03\x03\xFAh\x16\x1Bpd\xC3\x9F\x85\xB39\xB4g\xF6\xDB}\xCEw\xC0\xC2\xBA\xB6K\xAD}\xF0\x81\xD7{\xC0\xFD\x11 \x8C3=\x181\xF2t\xE4\xEC[_|z\xA8\x8D\xD4\xE0P\xA4\xF8(\xC3\xD0\xE1\xE9d\x5C\xFA\xD1\xAC\x1Ct\x00&\xC0+\xC0/\xC0,\xC00\xCC\xA9\xCC\xA8\xC0\x09\xC0\x13\xC0"" 400 166 ""-"" ""-""
+- - [08/Jan/2022:11:47:15 +0100] ""HEAD / HTTP/1.1"" 200 0 ""-"" ""Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.1916.47 Safari/537.36""
+- - [08/Jan/2022:11:53:41 +0100] ""GET / HTTP/1.1"" 200 612 ""-"" ""Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.116 Safari/537.36""
+- - [08/Jan/2022:12:09:33 +0100] ""GET http://azenv.net/ HTTP/1.1"" 200 396 ""-"" ""Go-http-client/1.1""
+- - [08/Jan/2022:12:51:55 +0100] ""HEAD /robots.txt HTTP/1.0"" 404 0 ""-"" ""-""
+```
+all of these requests should result in `404`s. I have already restricted access to the rocket server using nginx:
+```
+limit_req_zone $binary_remote_addr zone=mylimit:10m rate=30r/s;
+...
+limit_req zone=mylimit burst=10 nodelay;
+```
+nevertheless the error log shows this:
+```
+[2022-01-08 08:35:50] thread 'rocket-worker-thread' panicked at 'called `Result::unwrap()` on an `Err` value: Os { code: 11, kind: WouldBlock, message: ""Resource temporarily unavailable"" }', /root/.cargo/registry/src/github.com-1ecc6299db9ec823/tokio-1.6.1/src/runtime/blocking/pool.rs:261:14
+[2022-01-08 08:35:50] note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+[2022-01-08 08:35:50] thread 'rocket-worker-thread' panicked at 'called `Result::unwrap()` on an `Err` value: PoisonError { .. }', /root/.cargo/registry/src/github.com-1ecc6299db9ec823/tokio-1.6.1/src/runtime/blocking/pool.rs:287:86
+...
+[2022-01-08 08:36:00] thread 'rocket-worker-thread' panicked at 'called `Result::unwrap()` on an `Err` value: PoisonError { .. }', /root/.cargo/registry/src/github.com-1ecc6299db9ec823/tokio-1.6.1/src/runtime/blocking/pool.rs:287:86
+...
+[2022-01-08 08:36:00] thread 'rocket-worker-thread' panicked at 'called `Result::unwrap()` on an `Err` value: PoisonError { .. }', /root/.cargo/registry/src/github.com-1ecc6299db9ec823/tokio-1.6.1/src/runtime/blocking/pool.rs:287:86
+```
+
+P.S. I've already tried running the service with `RUST_BACKTRACE=full` but apparently I did something wrong.
+
+P.S. 2.: For some reason I can not really match the nginx access_log -> rocket_log. The only request that I found to be matching was the one at `08:28:50`. While all of these requests shown below should have resulted in 404s.
+```
+[08/Jan/2022:07:15:50 +0100] ""GET /_ignition/execute-solution HTTP/1.1"" 404 197 ""-"" ""Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36""
+[08/Jan/2022:07:29:33 +0100] ""\x03\x00\x00/*\xE0\x00\x00\x00\x00\x00Cookie: mstshash=Administr"" 400 166 ""-"" ""-""
+[08/Jan/2022:07:29:33 +0100] ""\x03\x00\x00/*\xE0\x00\x00\x00\x00\x00Cookie: mstshash=Administr"" 400 166 ""-"" ""-""
+[08/Jan/2022:07:31:51 +0100] ""GET /2.php HTTP/1.1"" 404 197 ""http://fonlove.com/2.php"" ""Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1)""
+[08/Jan/2022:07:31:57 +0100] ""GET /2.php HTTP/1.1"" 404 197 ""http://fonlove-berlin.com/2.php"" ""Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1)""
+[08/Jan/2022:08:28:50 +0100] ""GET /.env HTTP/1.1"" 404 197 ""-"" ""Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.129 Safari/537.36""
+[08/Jan/2022:08:40:21 +0100] ""POST /cache.php HTTP/1.1"" 404 134 ""-"" ""Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:66.0) Gecko/20100101 Firefox/66.0""
+[08/Jan/2022:08:53:16 +0100] ""GET /.env HTTP/1.1"" 404 197 ""-"" ""Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.129 Safari/537.36""
+[08/Jan/2022:09:35:01 +0100] ""GET /robots.txt HTTP/1.1"" 404 134 ""-"" ""Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)""
+[08/Jan/2022:10:04:24 +0100] ""\x16\x03\x01\x00\xE3\x01\x00\x00\xDF\x03\x03\xCC\x022\x08\x00?\xFAKC#\x15>hgKd\xEC\x89\x800'5\x02\xED\xA5\xECj\x1F\xFB\xDDJ\x9A\x00\x00h\xCC\x14\xCC\x13\xC0/\xC0+\xC00\xC0,\xC0\x11\xC0\x07\xC0'\xC0#\xC0\x13\xC0\x09\xC0(\xC0$\xC0\x14\xC0"" 400 166 ""-"" ""-""
+[08/Jan/2022:11:06:45 +0100] ""\x16\x03\x01\x00\xEE\x01\x00\x00\xEA\x03\x03\xBE\xBF&\xE6\xB3\x85?\xBA\xB9>\xF4\x85\xEB1\x1AI\x06<\xFA\xCF\x86\xCC\xA9\xAA\xB0\xD6k|\x8E\x99\x81\xA2 bo\xD2\xA9\xD3\xEE\xD8[\xF3{E\x04\x85\xEA\x8F}#\xB2\xF7\x07"" 400 166 ""-"" ""-""
+
+->
+
+[2022-01-08 05:04:35] >> No matching routes for GET /level/15/exec/-/sh/run/CR.
+[2022-01-08 05:04:35] >> Responding with registered (not_found) 404 catcher.
+[2022-01-08 08:28:50] >> No matching routes for GET /.env.
+[2022-01-08 08:28:50] >> Responding with registered (not_found) 404 catcher.
+[2022-01-08 09:40:33] >> No matching routes for GET /.env.
+[2022-01-08 09:40:33] >> Responding with registered (not_found) 404 catcher.
+[2022-01-08 10:23:12] >> No matching routes for POST /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php application/x-www-form-urlencoded.
+[2022-01-08 10:23:12] >> Responding with registered (not_found) 404 catcher.
+[2022-01-08 10:39:03] >> No matching routes for GET /ecp/Current/exporttool/microsoft.exchange.ediscovery.exporttool.application.
+[2022-01-08 10:39:03] >> Responding with registered (not_found) 404 catcher.
+[2022-01-08 10:47:30] >> No matching routes for GET /owa/auth/logon.aspx?url=https%3a%2f%2f1%2fecp%2f.
+[2022-01-08 10:47:30] >> Responding with registered (not_found) 404 catcher.
+```",2031,2022-01-12T09:18:33Z,0
+116,somehowchris,"> __Expected Behavior__
+> I expect rocket to safely recover from the panic and not to get tangled up because of poised threads.
+
+I totally disagree with that. Rocket shouldn't be responsible to regain health of your api. Rocket is an abstraction to let you create APIs and that's it's job. If the logic of your app panics you should use infrastructure to reschedule your app such as k8s or cf alongside some service like sentry catching your panic.
+
+Panics != Errors. Yes if your business logic returns some Result with an error, I would agree, rocket would need and does react to these with the appropriate response. Panics on the other side are meant to termine your thread because something happend which can't bee ignored (like to unwrap of your example). If rocket were just to regain health, this would just totally break the image of monitoring.
+
+if you'd like to get some async debugging going, use the `tracing` crate.
+
+BTW, have you tried to use the `[Json<T>` Type](https://rocket.rs/v0.5-rc/guide/requests/#json) of rocket instead of manually parsing it?",2031,2022-01-12T14:17:30Z,0
+117,the10thWiz,"The error logs appear to indicate that the issue resides within tokio, since that is where the panics are being generated.
+
+As noted, there are two types of panics in the initial logs: the OS error, and the Poison Errors. The Poison Errors should probably be panics, but they are a direct result of the OS Error (a mutex is being held by the thread that panics with the OS error). The OS Error should be gracefully handled (or an error should require immediate shutdown), and I'm not sure which.
+
+Looking into the tokio code, it appears that the OS Error is related to attempting to spawn a thread. My best guess is that the application has run into a limit on the number of threads it can spawn, which can cause `pthread_create` (the underlying C function) to block. Given that tokio puts pretty much everything into non-blocking mode, this results the `WouldBlock` error seen above.",2031,2022-01-12T14:41:40Z,0
+118,the10thWiz,"@FrankenApps I believe I have tracked down the issue. Specifically, you appear to be reaching a limit on the number of threads that a process is allowed to spawn. In theory, Tokio should prevent this since there is a configurable limit to the number of threads Tokio can spawn, but I believe the issue is that in your enviroment, the OS limit is lower than the Tokio limit.
+
+There are two ways to solve this: lower the Tokio limit, or raise the OS limit. The default Tokio limit is 512 blocking threads, and the same number of worker threads as cores in your system. After a quick look into Rocket configuration, it appears Rocket does not allow this value to be configured. I recommend taking a look at `/proc/sys/kernel/threads-max` and `ulimit/getrlimit` to see the system and per-user thread limit respectively.
+
+For now, I would recommend increasing the OS limit to at least 530. Please let me know if the system or per-user limit is already higher than this, since that would indicate a deeper issue.",2031,2022-01-12T15:54:16Z,0
+119,FrankenApps,"@the10thWiz Thank you for the amazing work.
+* `/proc/sys/kernel/threads-max` is `3090191`
+* `ulimit` gives `unlimited` and `ulimit -Sa`:
+```
+core file size          (blocks, -c) 0
+data seg size           (kbytes, -d) unlimited
+scheduling priority             (-e) 0
+file size               (blocks, -f) unlimited
+pending signals                 (-i) 1545095
+max locked memory       (kbytes, -l) 65536
+max memory size         (kbytes, -m) unlimited
+open files                      (-n) 1024
+pipe size            (512 bytes, -p) 8
+POSIX message queues     (bytes, -q) 819200
+real-time priority              (-r) 0
+stack size              (kbytes, -s) 8192
+cpu time               (seconds, -t) unlimited
+max user processes              (-u) 62987
+virtual memory          (kbytes, -v) unlimited
+file locks                      (-x) unlimited
+```
+
+However I still think you are correct, because I started the application using a `systemctl` service and when I run `systemctl status my_service` I get this:
+```
+● my_service.service - Description of my service.
+     Loaded: loaded (/etc/systemd/system/my_service.service; enabled; vendor preset: enabled)
+     Active: active (running) since Sat 2022-01-08 12:18:46 CET; 4 days ago
+     Main PID: 237 (bash)
+     Tasks: 9 (limit: 60)
+     Memory: 39.9M
+```
+so I think the problem is that the number of `Tasks` is currently limited to `60`, when it should be more than `512`?
+
+I will now try to [increase this limit](https://www.freedesktop.org/software/systemd/man/systemd.resource-control.html#TasksMax=N) and report back after.",2031,2022-01-12T16:21:57Z,0
+120,the10thWiz,"@FrankenApps Awesome. I've also gone ahead and made two pull requests in relation to this issue - First, I have an open pull request to add a Rocket configuration value to set the max worker threads, in addition to the setting for the max number of non-blocking worker threads. Second, I have opened a pull request in Tokio to add a better error message for the panic you ran into. I had to take a look at the actual source code and cross reference the line number to actually identify that the panic occurred when attempting to spawn a thread.
+
+The actual number should be higher than 512, since the non-blocking worker threads, in addition to the IO and Timer driver threads don't actually count towards the 512 limit.
+
+If this fixes the issue, I would also recommend looking into your dependencies to see what is spawning these blocking tasks, and try to reduce them. From my understanding of Tokio, this seems to imply that there are at least 60 concurrent blocking tasks, since Tokio will re-use existing threads if they are available. After taking a look inside Rocket, it looks like the only places where `spawn_blocking` is used is within the `TempFile` construct (and `sync_db_pools`). After taking a cursor glance at rocket_cors and mysql_async, neither of them use `spawn_blocking` internally, so they are unlikely to be the culprit. A more likely culprit would be any of the sync dependencies like gen-pdf, since I assume you call them from within `spawn_blocking`.",2031,2022-01-12T16:55:32Z,0
+121,FrankenApps,"@the10thWiz There is only one place in my codebase where I spawn any thread, but not using [`tokio::task::spawn_blocking`](https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html), instead I simply used [`std::thread::spawn`](https://doc.rust-lang.org/nightly/std/thread/fn.spawn.html).
+
+I have no prior experience with `tokio`, so it would not be a surprise to me if I did something wrong there:
+```rust
+#[post(""/route/that/sends/email"", format = ""json"", data = ""<data>"")]
+pub async fn send_mail_route(
+    pool: &State<Pool>,
+    data: rocket::serde::json::Json<MyData>,
+) -> std::io::Result<()> {
+    send_email().await;
+    Ok(())
+}
+
+async fn send_email() {
+    // Generate a PDF and send it as an email attachement if needed.
+    if send_the_mail {
+        // This might take a while, therefore execute it in another thread.
+        std::thread::spawn(move || {
+            let pdf_result = generate_document();
+            match pdf_result {
+                Ok(pdf) => {
+                    send_mail(pdf);
+                }
+                Err(err) => println!(""Generating PDF failed {}."", err.to_string()),
+            }
+        });
+    }
+}
+```
+
+Because initially I found that the thread might panic and a mutex might be locked as described [here](https://doc.rust-lang.org/std/sync/struct.PoisonError.html), I made sure everything I do in this thread will not result in a panic. 
+
+Is this something that should not be done with `tokio` and should I instead change the implementation to:
+```rust
+async fn send_email() {
+    // Generate a PDF and send it as an email attachement if needed.
+    if send_the_mail {
+        // This might take a while, therefore execute it in another thread.
+        tokio::task::spawn_blocking(move || {
+            let pdf_result = generate_document();
+            match pdf_result {
+                Ok(pdf) => {
+                    send_mail(pdf);
+                }
+                Err(err) => println!(""Generating PDF failed {}."", err.to_string()),
+            }
+        }).await;
+    }
+}
+```
+
+This feels unnatural to me, because I want the HTTP response to be a `200` first and then try sending the email (e.g. if for some reason it was impossible to send the mail I want to treat this as a silent error). Additionally I do not depend on a result of the synchronous operations.
+
+I do not ever join the thread, instead my plan is to let it do its thing (e.g. generate a PDF and send it per mail) and when its done (as far as I know) it should just cease to exist.
+
+A quick local test sending multiple emails on my MacOS machine resulted in a constant 9 threads after the emails had been sent.
+
+P.S. I set the limit to `570` for now, but it would not be a problem to go a bit higher. However I would instead like to sort out what causes these blocking threads.
+
+Thanks for all the help.",2031,2022-01-12T19:38:59Z,0
+122,the10thWiz,"Looking at your code, I don't think what you did is necessarily wrong. However, I would recommend using the `spawn_blocking` version, for a few reasons. The first thing I would like to note is that even if you use `spawn_blocking`, you don't need to await on the future, spawning it is enough for it to run to completion. This would give you the desired behavior: starting the task, and immediately returning a 200.
+
+`spawn_blocking` has a few advantages over `std::thread::spawn`. First, Tokio uses a thread pool, so this will avoid creating a new thread if possible (which can be an expensive operation), as well as setting a limit on the number of threads that can be spawned. Second, although not applicable here, you can call async code from within `spawn_blocking`, since it is an async task. This would make the process for switching to some async sendmail utility easier, but I don't know if this is actually a concern. Finally, I think it's a good idea to avoid using the std lib's threads if you're already using Tokio, just to keep things consistent.
+
+That being said, this could be part of the issue. These threads would count towards the limit set by the OS (or SystemD), but not towards the limit set by Tokio. I believe that `std::thread::spawn` will either panic or block if it can't spawn a thread, but I'm not sure which, or how to identify what it's doing.
+
+P.S., 570 should be good, especially if you don't use the std threads.",2031,2022-01-12T20:10:25Z,0
+123,FrankenApps,"I see. Yes I found out afterwards that I do not need to await the spawn_blocking and switched to using it.
+
+Now that I know that the problem is probably related to having too many threads I will monitor the application more close in that regard and try to see where the problem might exactly be.",2031,2022-01-12T20:29:24Z,0
+124,kolbma,@FrankenApps You should queue your pdf and mail jobs (can be done with files or in DB or with additional crates) and have one or a limited number of workers do the work on this queue. With just using uncontrolled spawning you might be vulnerable to a DOS by simply requesting the right url.,2031,2022-01-16T19:54:00Z,0
+125,FrankenApps,"@kolbma Yes, you are right.
+
+However in my case this is not concerning, because PDFs and email are only generated after successful authentication.",2031,2022-01-16T20:22:28Z,0
+126,IniterWorker,"It seems related to this. I am wondering what is the correct HTTP error status for this purpose. 
+
+```rust
+// In debug, make sure we agree with Hyper. Otherwise, cross our fingers
+// and trust that it only gives us valid URIs like it's supposed to.
+// TODO: Keep around not just the path/query, but the rest, if there?
+let uri = hyper.uri.path_and_query().ok_or(Error::InvalidUri(&hyper.uri))?;
+debug_assert!(Origin::parse(uri.as_str()).is_ok());
+let uri = Origin::new(uri.path(), uri.query().map(Cow::Borrowed));
+```
+
+Should we report it to the Hyper issue tracker and maybe return an `enum Error<'r>` on the Rocket side to remove the assert?",1994,2021-12-19T02:11:34Z,0
+127,IniterWorker,Related to https://github.com/SergioBenitez/Rocket/issues/1831,1994,2021-12-19T02:14:53Z,0
+128,kolbma,"What is here the difference between HTTP/1.1 and 2 in hyper?  
+The [`debug_assert`](https://github.com/SergioBenitez/Rocket/blob/8cae077ba1d54b92cdef3e171a730b819d5eeb8e/core/lib/src/request/request.rs#L978) fails only with HTTP/2.  
+
+https://github.com/SergioBenitez/Rocket/blob/8cae077ba1d54b92cdef3e171a730b819d5eeb8e/core/lib/src/request/request.rs#L974-L979
+
+I'm asking because I am not sure at the moment what would be the correct handling...  
+Is it a BadRequest (like it is currently for HTTP/1.1) or a NotFound?
+
+```bash
+[src/bin/client.rs:33] &req = Request {
+    method: GET,
+    uri: http://127.0.0.1:8000/hello/world,
+    version: HTTP/1.1,
+    headers: {},
+    body: Body(
+        Empty,
+    ),
+}
+[src/bin/client.rs:35] &res = Response {
+    status: 200,
+    version: HTTP/2.0,
+    headers: {
+        ""content-type"": ""text/plain; charset=utf-8"",
+        ""server"": ""Rocket"",
+        ""x-content-type-options"": ""nosniff"",
+        ""x-frame-options"": ""SAMEORIGIN"",
+        ""permissions-policy"": ""interest-cohort=()"",
+        ""content-length"": ""13"",
+        ""date"": ""Sun, 16 Jan 2022 15:36:27 GMT"",
+    },
+    body: Body(
+        Streaming,
+    ),
+}
+[src/bin/client.rs:40] &req = Request {
+    method: GET,
+    uri: http://127.0.0.1:8000/%2Fhello%2Fworld,
+    version: HTTP/1.1,
+    headers: {},
+    body: Body(
+        Empty,
+    ),
+}
+[src/bin/client.rs:42] &res = Response {
+    status: 404,
+    version: HTTP/2.0,
+    headers: {
+        ""content-type"": ""text/html; charset=utf-8"",
+        ""server"": ""Rocket"",
+        ""x-content-type-options"": ""nosniff"",
+        ""x-frame-options"": ""SAMEORIGIN"",
+        ""permissions-policy"": ""interest-cohort=()"",
+        ""content-length"": ""383"",
+        ""date"": ""Sun, 16 Jan 2022 15:36:27 GMT"",
+    },
+    body: Body(
+        Streaming,
+    ),
+}
+[src/bin/client.rs:58] &req = Request {
+    method: GET,
+    uri: http://127.0.0.1:8000/%2Fhello%2Fworld,
+    version: HTTP/1.1,
+    headers: {},
+    body: Body(
+        Empty,
+    ),
+}
+[src/bin/client.rs:61] &res = Response {
+    status: 404,
+    version: HTTP/2.0,
+    headers: {
+        ""content-type"": ""text/html; charset=utf-8"",
+        ""server"": ""Rocket"",
+        ""x-content-type-options"": ""nosniff"",
+        ""x-frame-options"": ""SAMEORIGIN"",
+        ""permissions-policy"": ""interest-cohort=()"",
+        ""content-length"": ""383"",
+        ""date"": ""Sun, 16 Jan 2022 15:36:27 GMT"",
+    },
+    body: Body(
+        Streaming,
+    ),
+}
+[src/bin/client.rs:80] &req = Request {
+    method: GET,
+    uri: http://127.0.0.1:8000%2Fhello%2Fworld,
+    version: HTTP/1.1,
+    headers: {},
+    body: Body(
+        Empty,
+    ),
+}
+Error: hyper::Error(Http2, Error { kind: Reset(StreamId(7), INTERNAL_ERROR, Remote) })
+```
+
+With HTTP/1.1...
+```bash
+[src/bin/client.rs:34] &req = Request {
+    method: GET,
+    uri: http://127.0.0.1:8000/hello/world,
+    version: HTTP/1.1,
+    headers: {},
+    body: Body(
+        Empty,
+    ),
+}
+[src/bin/client.rs:36] &res = Response {
+    status: 200,
+    version: HTTP/1.1,
+    headers: {
+        ""content-type"": ""text/plain; charset=utf-8"",
+        ""server"": ""Rocket"",
+        ""x-content-type-options"": ""nosniff"",
+        ""x-frame-options"": ""SAMEORIGIN"",
+        ""permissions-policy"": ""interest-cohort=()"",
+        ""content-length"": ""13"",
+        ""date"": ""Sun, 16 Jan 2022 15:41:22 GMT"",
+    },
+    body: Body(
+        Streaming,
+    ),
+}
+[src/bin/client.rs:41] &req = Request {
+    method: GET,
+    uri: http://127.0.0.1:8000/%2Fhello%2Fworld,
+    version: HTTP/1.1,
+    headers: {},
+    body: Body(
+        Empty,
+    ),
+}
+[src/bin/client.rs:43] &res = Response {
+    status: 404,
+    version: HTTP/1.1,
+    headers: {
+        ""content-type"": ""text/html; charset=utf-8"",
+        ""server"": ""Rocket"",
+        ""x-content-type-options"": ""nosniff"",
+        ""x-frame-options"": ""SAMEORIGIN"",
+        ""permissions-policy"": ""interest-cohort=()"",
+        ""content-length"": ""383"",
+        ""date"": ""Sun, 16 Jan 2022 15:41:22 GMT"",
+    },
+    body: Body(
+        Streaming,
+    ),
+}
+[src/bin/client.rs:59] &req = Request {
+    method: GET,
+    uri: http://127.0.0.1:8000/%2Fhello%2Fworld,
+    version: HTTP/1.1,
+    headers: {},
+    body: Body(
+        Empty,
+    ),
+}
+[src/bin/client.rs:62] &res = Response {
+    status: 404,
+    version: HTTP/1.1,
+    headers: {
+        ""content-type"": ""text/html; charset=utf-8"",
+        ""server"": ""Rocket"",
+        ""x-content-type-options"": ""nosniff"",
+        ""x-frame-options"": ""SAMEORIGIN"",
+        ""permissions-policy"": ""interest-cohort=()"",
+        ""content-length"": ""383"",
+        ""date"": ""Sun, 16 Jan 2022 15:41:22 GMT"",
+    },
+    body: Body(
+        Streaming,
+    ),
+}
+[src/bin/client.rs:81] &req = Request {
+    method: GET,
+    uri: http://127.0.0.1:8000%2Fhello%2Fworld,
+    version: HTTP/1.1,
+    headers: {},
+    body: Body(
+        Empty,
+    ),
+}
+[src/bin/client.rs:84] &res = Response {
+    status: 400,
+    version: HTTP/1.1,
+    headers: {
+        ""content-length"": ""0"",
+        ""date"": ""Sun, 16 Jan 2022 15:41:22 GMT"",
+    },
+    body: Body(
+        Empty,
+    ),
+}
+```",1994,2022-01-16T15:32:51Z,0
+129,kolbma,"""Funny"" stuff...
+
+https://github.com/hyperium/hyper/issues/2736",1994,2022-01-16T17:59:21Z,0
+130,kolbma,@heikki-heikkila Can you please edit the title and change the HTTP to HTTP/2!,1994,2022-01-16T18:10:52Z,0
+131,kolbma,Have you set a `secret_key`? https://docs.rs/rocket/0.5.0-rc.1/rocket/http/struct.CookieJar.html#encryption-key,2063,2022-01-16T19:19:09Z,0
+132,jamesbirtles,"> Have you set a `secret_key`? https://docs.rs/rocket/0.5.0-rc.1/rocket/http/struct.CookieJar.html#encryption-key
+
+Of course, not that it would matter though as firstly rocket would generate one if not specified, and secondly `get_private_pending` is only relevant within the same request so the fact the secret key would regenerate on restart wouldn't matter here",2063,2022-01-17T10:17:15Z,0
+133,kolbma,"I think there is missing something serde related to handle missing fields like its default.  
+With json-parsing you would have the same problem.  
+But can't remember right now exactly what to do to get this to work.",2007,2022-01-17T02:11:42Z,0
+134,the10thWiz,"Based on my quick testing, the issue is `#[field(default = None)]`. If you remove it, serde correctly detects that the Option type is indeed optional, and uses None if the value isn't present.
+
+This is probably either an issue in Serde or Rocket, since it should work reguardless, but this is the work around for now. In general, I would recommend only using `#[field(...)]` if you have to (i.e. it deviates from the defaults), since the defaults tend to be pretty good.",2007,2022-01-17T15:13:56Z,0
+135,kolbma,Found some newer restrictions in trying to get the scipts/test.sh to work.,2072,2022-01-18T13:00:46Z,0
+136,kolbma,"I can confirm this.  
+It works if you redirect the process output...
+
+`executable >out.log 2>&1`
+
+or
+
+`executable 2>&1 | tee out.log`
+
+Will see if this can be fixed in Rocket or it is a problem in tokio::signal.",2019,2022-01-16T20:37:47Z,0
+137,kolbma,"@darakian Does Rocket successful service requests in this detached state?
+
+It panics in trying to `warn!(""Received {}. Requesting shutdown."", sig);` because print to stdout is not possible anylonger.
+",2019,2022-01-16T20:48:45Z,0
+138,kolbma,"Mmh... with this pull in the year 2015 print/println shouldn't panic, only if stdout is requested somehow via `std::io::stdout`.  
+https://github.com/rust-lang/rfcs/pull/1014
+
+But it is documented that it will panic, for println!:
+```
+Panics if writing to [io::stdout] fails.
+```",2019,2022-01-16T21:17:13Z,0
+139,kolbma,sorry. shot too fast... I'd tested it with redirecting the output ;-)  ,2019,2022-01-16T22:50:35Z,0
+140,kolbma,"It panics at `std::io::stdio::print_to`...
+```
+rust_panic (@rust_panic:7)
+rust_panic_with_hook (@std::panicking::rust_panic_with_hook::h71e6a073d87de1f5:105)
+{{closure}} (@std::panicking::begin_panic_handler::_$u7b$$u7b$closure$u7d$$u7d$::hd549436f6bb6dbb8:42)
+__rust_end_short_backtrace<closure-0,!> (@std::sys_common::backtrace::__rust_end_short_backtrace::h4e5f4b72b04174c3:10)
+begin_panic_handler (@rust_begin_unwind:21)
+begin_panic_fmt (@std::panicking::begin_panic_fmt::h818c3c917eaeb432:16)
+std::io::stdio::print_to (@std::io::stdio::_print::hfdac4ecf8a146755:171)
+_print (@std::io::stdio::_print::hfdac4ecf8a146755:77)
+log (/home/makolb/Source/Repos/rocket-issues/issue2019/Rocket/core/lib/src/log.rs:118)
+__private_api_log (/home/makolb/.cargo/registry/src/github.com-1ecc6299db9ec823/log-0.4.14/src/lib.rs:1460)
+{{closure}}<tokio::net::tcp::listener::TcpListener> (/home/makolb/Source/Repos/rocket-issues/issue2019/Rocket/core/lib/src/server.rs:433)
+poll<generator-1> (/home/makolb/.rustup/toolchains/1.51.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/future/mod.rs:80)
+{{closure}}<core::future::from_generator::GenFuture<generator-1>> (/home/makolb/.cargo/registry/src/github.com-1ecc6299db9ec823/tokio-1.15.0/src/runtime/task/core.rs:161)
+with_mut<tokio::runtime::task::core::Stage<core::future::from_generator::GenFuture<generator-1>>,core::task::poll::Poll<()>,closure-0> (/home/makolb/.cargo/registry/src/github.com-1ecc6299db9ec823/tokio-1.15.0/src/loom/std/unsafe_cell.rs:14)
+poll<core::future::from_generator::GenFuture<generator-1>> (/home/makolb/.cargo/registry/src/github.com-1ecc6299db9ec823/tokio-1.15.0/src/runtime/task/core.rs:151)
+{{closure}}<core::future::from_generator::GenFuture<generator-1>> (/home/makolb/.cargo/registry/src/github.com-1ecc6299db9ec823/tokio-1.15.0/src/runtime/task/harness.rs:461)
+call_once<core::task::poll::Poll<()>,closure-0> (/home/makolb/.rustup/toolchains/1.51.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:344)
+do_call<std::panic::AssertUnwindSafe<closure-0>,core::task::poll::Poll<()>> (/home/makolb/.rustup/toolchains/1.51.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:379)
+__rust_try (@__rust_try:10)
+try<core::task::poll::Poll<()>,std::panic::AssertUnwindSafe<closure-0>> (/home/makolb/.rustup/toolchains/1.51.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:343)
+```
+log.rs:118 is official this https://github.com/SergioBenitez/Rocket/blob/8cae077ba1d54b92cdef3e171a730b819d5eeb8e/core/lib/src/log.rs#L104
+
+I've replaced this println! with`println!(""Warning"");` and still panics.  
+But with `io::stdout().write(b""Warning"").unwrap();` there is __no__ panic.
+
+What are the print-macros doing here? Do they cache somewhere _stdout_?",2019,2022-01-16T23:14:49Z,0
+141,kolbma,https://github.com/rust-lang/rust/issues/92989,2019,2022-01-17T01:18:17Z,0
+142,darakian,"> @darakian Does Rocket successful service requests in this detached state?
+
+It does. The only noticeable behavior has been that I needed to alter a control script. Thanks for digging into this, it was a fascinating read!",2019,2022-01-18T16:39:20Z,0
+143,blackghost1987,"Rocket 0.5.0-rc1 can be built with stable! Version on Crates.io: https://crates.io/crates/rocket/0.5.0-rc.1
+The migration guide is here: https://rocket.rs/master/guide/upgrading-from-0.4/
+Also the Changelog lists all breaking changes you need to now about for a migration:
+https://github.com/SergioBenitez/Rocket/blob/v0.5-rc/CHANGELOG.md#version-050-rc1-jun-9-2021
+
+Note that there's no current timeline for the full release of 0.5 unfortunately, but rc1 works fine for a bunch of projects for some time now, so feel free to upgrade.
+
+",2075,2022-01-19T10:34:22Z,0
+144,SergioBenitez,"It's not private, it's simply not in a release version. ",1826,2021-08-16T21:18:17Z,0
+145,mataslauzadis,"Should references to this macro be removed from the documentation?
+
+https://api.rocket.rs/master/rocket_dyn_templates/struct.Template.html#examples",1826,2022-01-12T23:52:01Z,0
+146,Merlin-Brandt,"Yes, they really should. It's misleading and confusing. ",1826,2022-01-20T12:53:16Z,0
+147,Merlin-Brandt,"Is there another way to put the values into the templates? If not, I see no use for this crate at this moment.",1826,2022-01-20T13:05:31Z,0
+148,blackghost1987,"You can create a simple context struct manually, the `context!` macro is just a helper to create a quick, one-off context, without defining a type. See the comment before the macro definition:
+```
+/// # Examples
+///
+/// The following code:
+///
+/// ```rust
+/// # #[macro_use] extern crate rocket;
+/// # use rocket_dyn_templates::{Template, context};
+/// #[get(""/<foo>"")]
+/// fn render_index(foo: u64) -> Template {
+///     Template::render(""index"", context! {
+///         // Note that shorthand field syntax is supported.
+///         // This is equivalent to `foo: foo,`
+///         foo,
+///         bar: ""Hello world"",
+///     })
+/// }
+/// ```
+///
+/// is equivalent to the following, but without the need to manually define an
+/// `IndexContext` struct:
+///
+/// ```rust
+/// # use rocket_dyn_templates::Template;
+/// # use rocket::serde::Serialize;
+/// # use rocket::get;
+/// #[derive(Serialize)]
+/// # #[serde(crate = ""rocket::serde"")]
+/// struct IndexContext<'a> {
+///     foo: u64,
+///     bar: &'a str,
+/// }
+///
+/// #[get(""/<foo>"")]
+/// fn render_index(foo: u64) -> Template {
+///     Template::render(""index"", IndexContext {
+///         foo,
+///         bar: ""Hello world"",
+///     })
+/// }
+```
+
+Templating is definitely usable at the moment, just create a context struct which implements serialize. Or you can even use a unit type `()` as well if you don't need any context.
+
+I'm not sure why the macro is private in the current version or will it stay private in the release, but if it will stay private then it should not be used in the examples, that's for sure. But it being unreachable is not a major loss in my opinion, because if you want to reuse the same context type multiple times, then you would need to define a struct type anyway.",1826,2022-01-21T10:41:14Z,0
+149,blackghost1987,"Sorry, it turns out the `()` solution is compiling fine, but it gives a runtime error. You have to use an empty struct, if there's no context. Something like this:
+```
+#[derive(Serialize)]
+struct EmptyContext {}
+
+#[get(""/<foo>"")]
+fn render_index(foo: u64) -> Template {
+    Template::render(""index"", EmptyContext {})
+}
+```
+
+If somebody knows a simpler way to define an empty context, please let me know.
+
+
+",1826,2022-01-21T11:46:56Z,0
+150,kolbma,Your example won't work...,2006,2022-01-21T17:08:58Z,0
+151,bytebuddha,"Hello everybody, has anyone given more thought to this? I need this feature, my use case is trying to create a webdav server in my app that can share my application contacts with phones/computers. WebDav makes use of a few custom methods like 'PROPFIND' & 'MKCOL' that i would need to be able to use. 
+
+I have found #619 but after reading the comments left by @SergioBenitez I'm not sure how to move forward with this. I agree that putting a String in Method is not the best idea, but i don't see a way to possibly use a &'static str there. 
+
+My idea is to create a feature gate  (maybe named webdav_methods) that when enabled would add the webdav related http methods to the Methods enum. I don't know much about the internals of the route macros (route, get, post, etc.) but i don't think it would make much sense to provide a macro for these methods if they could be created with just the `#[route(MKCOL, ...)]` macro.
+
+Here is a list of all the Extension Methods would be necessary for this feature
+
+- COPY
+- LOCK
+- MKCOL
+- MOVE
+- PROPFIND
+- PROPPATCH
+- UNLOCK",232,2020-11-26T21:56:28Z,0
+152,alexandrebouthinon,"Hello, any updates on this? I am very interested in supporting additional HTTP methods (if you don't want to support defining them via a string). My use case is to be able to declare routes supporting LOCK and UNLOCK methods",232,2022-01-22T00:24:55Z,0
+153,clubby789,Making TLS work would probably require refactoring the `Listener` and `Connection` traits to not expect IP-based listeners,2013,2021-12-10T12:34:35Z,0
+154,kolbma,What is the use case at your place?,2013,2022-01-22T02:39:25Z,0
+155,kolbma,"This should be only needed if you use somewhere a different serde version and not `rocket::serde`.   
+Have you put an own serde dependency in the Cargo.toml of your project? Can you confirm this?!  ",1939,2022-01-22T11:32:34Z,0
+156,Qqwy,"Live reloading is a wonderful feature. However, supporting it in a compiled language is rather difficult.
+
+There is some work done in making it possible to do dynamic loading in Rust, but again, this kind of thing is very difficult in a compiled system, and therefore the current state of this is not mature enough to include in Rocket, I think. [more information](http://stackoverflow.com/questions/22461457/does-rust-have-a-dlopen-equivalent).",292,2017-05-17T16:58:15Z,0
+157,blackghost1987,"So Auto Reload in case of source code changes is probably not viable right now, but what about reloading the templates automatically? Is it possible somehow for Tera templates for example? ",292,2017-05-17T17:04:05Z,0
+158,Eijebong,See #163 regarding the templates reloading,292,2017-05-17T17:07:04Z,0
+159,SergioBenitez,"I think something like per-route live reloading would be absolutely incredible, but given the complexities involved and the nature of Rust, is unlikely to ever happen. Nonetheless, incremental compilation is actively being worked on by the Rust team, so simply recompiling and restarting should eventually be plenty fast. Coupled with something like `watchexec` as mentioned in #163, and you'll have something very close to ""auto reload"".
+
+For templating specifically, I think it would be nice if Rocket could reload templates automatically during development. Further, I think it's absolutely possible, and quite simple, in fact, given the new fairings and the new `Template` implementation in master. We should see this in the not-too-distant future. We can have that discussion in #163.",292,2017-05-19T10:08:26Z,0
+160,shurik,"Hello, in case anyone comes across this issue like I did, there's a pretty simple, ""Unixy"" workaround that will reload the development server whenever a file changes:
+
+```sh
+fd -g ""*.rs"" | entr -r cargo run
+```",292,2020-08-05T17:25:46Z,0
+161,kotovalexarian,For me the following shell code works: `find src -type f | entr -r cargo run`,292,2020-10-14T22:03:50Z,0
+162,sondnm,I use [cargo-watch](https://crates.io/crates/cargo-watch) `cargo watch -x run`.,292,2020-11-19T13:56:49Z,0
+163,SergioBenitez,"For posterity, note that since this issue, Rocket has gained the ability to automatically live-reload templates. This is enabled by default when the application is compiled in debug mode. There is no need to use external tools if the desire is to see changes to templates as they happen. If code changes occur elsewhere, however, the suggestion to use tools like `cargo-watch` and `watchexec` remain valid.",292,2020-11-19T22:40:16Z,0
+164,Away0x,"I use [cargo-make](https://crates.io/crates/cargo-make#usage-watch)
+```toml
+# Makefile.toml
+
+# cargo make watch
+[tasks.watch]
+command = ""cargo""
+args = [""run""]
+watch = true
+```",292,2021-08-03T07:25:19Z,0
+165,hadpro24,"> I use [cargo-watch](https://crates.io/crates/cargo-watch) `cargo watch -x run`.
+
+Thanks you",292,2022-01-22T12:40:46Z,0
+166,oren0e,Any updates on that being merged?,1887,2021-10-12T16:04:12Z,0
+167,isabelatkinson,Anything you need on my end to get this merged?,1887,2021-10-15T20:53:42Z,0
+168,kolbma,"Bumped mongodb to 2.1 in https://github.com/rocket-org/Rocket/pull/3
+
+https://github.com/kolbma/Rocket/commit/5b1414cf58b88af1d780c241bebbe6a8bc98ca34
+https://github.com/kolbma/Rocket/commit/8e1c3c03385a85f440939ddfd6a545de4407b76e
+",1887,2022-01-22T12:56:25Z,0
+169,somehowchris,"The maintainer of this project, Sergio, is currently off due to personal reasons, so no plans until now",2054,2022-01-06T22:51:41Z,0
+170,digitwolf,Does anyone else have permissions to release? This is kinda a big bummer. Would be sad if the project died because the creator no longer has time to maintain it.,2054,2022-01-14T19:58:12Z,0
+171,somehowchris,No. But we are discussing to manage a fork,2054,2022-01-14T20:07:37Z,0
+172,somehowchris,You cam still use it by pointing the cargo dep to the master branch,2054,2022-01-14T20:08:16Z,0
+173,digitwolf,I actually can't. My build system prohibits that. So I gonna have to post a copy of rocket crate,2054,2022-01-21T21:37:10Z,0
+174,kolbma,https://github.com/rocket-org/Rocket/issues/4,2054,2022-01-22T13:18:43Z,0
+175,jebrosen,"To my memory most of these are indeed used, particularly in tests. Have you tested these changes, e.g. with `./scripts/test.sh` locally as described [in the README](https://github.com/SergioBenitez/Rocket#testing)?",1896,2021-09-12T18:52:51Z,0
+176,kolbma,"All is used in (doc)tests/examples and rand is just a fixation for the version, because rand is used by many other dependencies.",1896,2022-01-22T17:12:18Z,0
+177,Bharath1433,"Help to create in thermux
+",1882,2021-09-09T06:21:19Z,0
+178,Lochlanna,"> Help to create in thermux
+
+Sorry, but what's thermux?",1882,2021-09-11T02:11:28Z,0
+179,kolbma,"I've reworked this some more...  
+https://github.com/rocket-org/Rocket/pull/3/commits/e6bd00cc97676bc3260400f505217eaa796b9a61
+https://github.com/rocket-org/Rocket/pull/3/commits/d9c1af72248f54e828fca0e5a28804f2db99e116",1882,2022-01-22T23:00:08Z,0
+180,somehowchris,Did you run that as debug or release?,2062,2022-01-10T09:54:45Z,0
+181,ssendev,"I have to admit these numbers were run in debug but the original issue surfaced in production
+
+The 40ms spike at 4097 bytes remains if anything it's even more pronounced since the larger requests did speed up.
+i also found out that the speed recovers instantly at 8430 bytes
+
+```bash
+for b in 4096 4097 8429 8430 10000 40960 409600 4096000;do; for n in 1 10 100;do \
+  echo -n ""b=$b n=$n ""; httperf --server localhost --port 8000 \
+  --uri /$b  --num-calls $n | grep ""ms/req""; done; done
+```
+
+|  bytes | [ms/req] n=1 | 10 | 100 |
+| -----------: | ---: | ----: | ---: |
+| 4096       | 0.8 | 0.6 | 0.1 |
+| 4097       | 0.3 |  **37.4** | **40.6**  |
+| 8429       | 0.3 | **37.8** | **40.8** |
+| 8430       | 0.3 | 4.3 | 3.0 |
+| 10000     | 0.4 |  4.3 | 2.6  |
+| 40960     | 0.3 | 0.2 | 3.9 |
+| 409600   | 1.4 | 17.5 | 10.6 |
+| 4096000 | 11.9 | 18.8 | 24.2 |
+",2062,2022-01-10T10:27:29Z,0
+182,somehowchris,"Ok well same for optimized releases, may I ask, have you run any perf benchmarks? just to see if it has something to do with mem preasure/cpu overhead",2062,2022-01-10T10:42:03Z,0
+183,ssendev,"Running with 1 worker is the same. 
+I didn't see any obvious differences in `cargo flamegraph` / `hotspot` for 4096 and 4097 bytes but it's complaining that the sample rate is too low.
+
+Always allocating the same amount has still the same result
+
+```rust
+#[get(""/<size>"")]
+fn size(size: usize) -> String {
+    let mut s = String::with_capacity(4_000_000);
+    if size == 4096 {
+            s += "" "";
+    }
+    for _ in 0..size {
+        s += "" "";
+    }
+    if size == 4096 {
+        s.truncate(size);
+    }
+    s
+}
+```
+
+as has returning a `&'static str` with manually pasted content of the correct size",2062,2022-01-10T13:10:28Z,0
+184,kolbma,@ssendev Don't I get the point or this code is for sure slower with 4096 than any other size... ,2062,2022-01-10T14:37:44Z,0
+185,somehowchris,"I may have identified the problem. Since Sergio is kinda off until mid this year for personal reasons I have created a fork to work on. Well at least using the script with httperf provided by you I couldn‘t notice delays anymore
+
+```toml
+[dependencies]
+rocket = { git = ""https://github.com/somehowchris/Rocket"", tag = ""0.5.0-patch.1""}
+```
+> Includes the fix
+
+",2062,2022-01-10T16:10:33Z,0
+186,ssendev,"@kolbma 
+
+Yes there is a sharp cliff above 4096.
+**every time**  it can already be observed with --num-calls 2 though then it's only 20ms with 10 it's grown to 37ms and won't go much above 40 even with 1000. But when using 4096 bytes 100000 calls round to 0.0ms/req (20503.9 req/s)
+
+```shell
+time httperf --server localhost --port 8000 --uri /4096  --num-calls 100000
+real	4,958
+user	2,976
+sys	1,541
+maxmem	8 MB
+faults	0
+```
+
+```shell
+time httperf --server localhost --port 8000 --uri /4097  --num-calls 1000
+real	40,996
+user	33,519
+sys	7,286
+maxmem	8 MB
+faults	0
+```
+
+and requests stay slow until a size of 8429 where there is another cliff and response times return from ~40ms to 1.7ms
+
+```shell
+time httperf --server localhost --port 8000 --uri /8429  --num-calls 1000
+real	41,005
+user	33,381
+sys	7,468
+maxmem	8 MB
+faults	0
+```
+
+```shell
+time httperf --server localhost --port 8000 --uri /8430  --num-calls 10000
+real	16,524
+user	13,117
+sys	3,224
+maxmem	8 MB
+faults	0
+```
+
+beware the changing `--num-calls` to keep total runtime in check
+
+
+@somehowchris 
+I tried your branch but can't see any difference. Though there is only one commit updating dependencies was there supposed to be another one?",2062,2022-01-10T16:29:55Z,0
+187,kolbma,"I've put it up here https://github.com/kolbma/rocket-issue-2062 with modification to 
+```
+#[get(""/<size>"")]
+fn size(size: usize) -> &'static str {
+```
+
+But I see there some more slow requests... Have a look at the n=2... also these are not constant slow in relation to content size...  
+
+Have you tried a different benchmark tool?
+
+```
+b=4096 n=1 Request rate: 1677.7 req/s (0.6 ms/req)
+b=4096 n=2 Request rate: 1212.1 req/s (0.8 ms/req)
+b=4096 n=10 Request rate: 2947.3 req/s (0.3 ms/req)
+b=4096 n=100 Request rate: 4558.9 req/s (0.2 ms/req)
+b=4097 n=1 Request rate: 1127.5 req/s (0.9 ms/req)
+b=4097 n=2 Request rate: 45.0 req/s (22.2 ms/req)
+b=4097 n=10 Request rate: 25.4 req/s (39.3 ms/req)
+b=4097 n=100 Request rate: 23.0 req/s (43.6 ms/req)
+b=8429 n=1 Request rate: 871.1 req/s (1.1 ms/req)
+b=8429 n=2 Request rate: 45.2 req/s (22.1 ms/req)
+b=8429 n=10 Request rate: 25.2 req/s (39.6 ms/req)
+b=8429 n=100 Request rate: 23.0 req/s (43.6 ms/req)
+b=8430 n=1 Request rate: 871.1 req/s (1.1 ms/req)
+b=8430 n=2 Request rate: 1769.7 req/s (0.6 ms/req)
+b=8430 n=10 Request rate: 202.8 req/s (4.9 ms/req)
+b=8430 n=100 Request rate: 389.8 req/s (2.6 ms/req)
+b=10000 n=1 Request rate: 1672.4 req/s (0.6 ms/req)
+b=10000 n=2 Request rate: 45.8 req/s (21.8 ms/req)
+b=10000 n=10 Request rate: 214.8 req/s (4.7 ms/req)
+b=10000 n=100 Request rate: 389.8 req/s (2.6 ms/req)
+b=40960 n=1 Request rate: 1101.4 req/s (0.9 ms/req)
+b=40960 n=2 Request rate: 22.6 req/s (44.2 ms/req)
+b=40960 n=10 Request rate: 915.4 req/s (1.1 ms/req)
+b=40960 n=100 Request rate: 1080.8 req/s (0.9 ms/req)
+b=409600 n=1 Request rate: 225.6 req/s (4.4 ms/req)
+b=409600 n=2 Request rate: 231.9 req/s (4.3 ms/req)
+b=409600 n=10 Request rate: 77.9 req/s (12.8 ms/req)
+b=409600 n=100 Request rate: 185.4 req/s (5.4 ms/req)
+b=4096000 n=1 Request rate: 12.7 req/s (78.7 ms/req)
+b=4096000 n=2 Request rate: 29.3 req/s (34.1 ms/req)
+b=4096000 n=10 Request rate: 30.1 req/s (33.2 ms/req)
+b=4096000 n=100 Request rate: 25.0 req/s (40.0 ms/req)
+```
+
+Another...
+```
+b=4096 n=1 Request rate: 1181.8 req/s (0.8 ms/req)
+b=4096 n=2 Request rate: 1167.5 req/s (0.9 ms/req)
+b=4096 n=10 Request rate: 2947.1 req/s (0.3 ms/req)
+b=4096 n=100 Request rate: 3472.5 req/s (0.3 ms/req)
+b=4097 n=1 Request rate: 1519.7 req/s (0.7 ms/req)
+b=4097 n=2 Request rate: 43.1 req/s (23.2 ms/req)
+b=4097 n=10 Request rate: 25.1 req/s (39.8 ms/req)
+b=4097 n=100 Request rate: 23.0 req/s (43.5 ms/req)
+b=8429 n=1 Request rate: 811.6 req/s (1.2 ms/req)
+b=8429 n=2 Request rate: 45.9 req/s (21.8 ms/req)
+b=8429 n=10 Request rate: 25.2 req/s (39.6 ms/req)
+b=8429 n=100 Request rate: 23.0 req/s (43.6 ms/req)
+b=8430 n=1 Request rate: 1356.9 req/s (0.7 ms/req)
+b=8430 n=2 Request rate: 48.7 req/s (20.5 ms/req)
+b=8430 n=10 Request rate: 225.9 req/s (4.4 ms/req)
+b=8430 n=100 Request rate: 473.5 req/s (2.1 ms/req)
+b=10000 n=1 Request rate: 944.2 req/s (1.1 ms/req)
+b=10000 n=2 Request rate: 47.9 req/s (20.9 ms/req)
+b=10000 n=10 Request rate: 223.8 req/s (4.5 ms/req)
+b=10000 n=100 Request rate: 394.1 req/s (2.5 ms/req)
+b=40960 n=1 Request rate: 1128.7 req/s (0.9 ms/req)
+b=40960 n=2 Request rate: 1109.9 req/s (0.9 ms/req)
+b=40960 n=10 Request rate: 110.9 req/s (9.0 ms/req)
+b=40960 n=100 Request rate: 692.7 req/s (1.4 ms/req)
+b=409600 n=1 Request rate: 229.7 req/s (4.4 ms/req)
+b=409600 n=2 Request rate: 266.6 req/s (3.8 ms/req)
+b=409600 n=10 Request rate: 120.6 req/s (8.3 ms/req)
+b=409600 n=100 Request rate: 224.9 req/s (4.4 ms/req)
+b=4096000 n=1 Request rate: 12.6 req/s (79.4 ms/req)
+b=4096000 n=2 Request rate: 27.6 req/s (36.2 ms/req)
+b=4096000 n=10 Request rate: 24.1 req/s (41.5 ms/req)
+b=4096000 n=100 Request rate: 26.8 req/s (37.3 ms/req)
+```",2062,2022-01-10T22:43:28Z,0
+188,ssendev,"That the slowdowns aren't linearly correlated to content size is what makes this strange. The sharp edge at 4KiB makes me think it's some buffer that causes scheduling issues.
+
+i just tried Apache bench `ab -k -c 1 -n 100 http://localhost:8000/4097` and here the problem only occurs if `-k` (KeepAlive) is present",2062,2022-01-10T23:24:12Z,0
+189,kolbma,"I've tried wrk... the 1st value is average... you see also the breakdown with 4097 and the raise with 8430...
+
+```
+b=4096 n=1		    Req/Sec     4.90k   192.57     5.11k    83.33%
+b=4096 n=2		    Req/Sec     4.38k   250.42     4.98k    72.13%
+b=4096 n=10		    Req/Sec     1.54k    95.76     1.99k    87.66%
+b=4096 n=100		    Req/Sec   151.30     27.81   555.00     89.34%
+b=4097 n=1		    Req/Sec    26.97     18.93   121.00     93.33%
+b=4097 n=2		    Req/Sec    27.03     19.32   128.00     93.33%
+b=4097 n=10		    Req/Sec    26.67     18.68   121.00     93.33%
+b=4097 n=100		    Req/Sec    25.75     14.92   141.00     92.66%
+b=8429 n=1		    Req/Sec    23.27      5.45    40.00     70.00%
+b=8429 n=2		    Req/Sec    23.25      5.48    40.00     70.00%
+b=8429 n=10		    Req/Sec    23.02      5.36    40.00     72.00%
+b=8429 n=100		    Req/Sec    22.50      4.74    40.00     76.76%
+b=8430 n=1		    Req/Sec   424.20    131.67   730.00     70.00%
+b=8430 n=2		    Req/Sec   480.78    160.94   830.00     71.67%
+b=8430 n=10		    Req/Sec   330.81    104.48   760.00     70.86%
+b=8430 n=100		    Req/Sec    87.55     66.76   535.00     87.71%
+b=10000 n=1		    Req/Sec   323.00    123.98   636.00     73.33%
+b=10000 n=2		    Req/Sec   422.53    132.79     0.90k    70.00%
+b=10000 n=10		    Req/Sec   399.53    117.16   820.00     71.71%
+b=10000 n=100		    Req/Sec    88.93     63.40   690.00     88.01%
+b=40960 n=1		    Req/Sec    59.53     35.75   160.00     70.00%
+b=40960 n=2		    Req/Sec    54.45     32.91   171.00     70.00%
+b=40960 n=10		    Req/Sec    40.58     29.48   191.00     88.20%
+b=40960 n=100		    Req/Sec    55.47     42.02   350.00     82.38%
+b=409600 n=1		    Req/Sec    46.67     14.70    80.00     66.67%
+b=409600 n=2		    Req/Sec    40.80     15.40    80.00     73.33%
+b=409600 n=10		    Req/Sec    28.17      9.88    70.00     80.86%
+b=409600 n=100		    Req/Sec    10.33      3.80    60.00     78.97%
+b=4096000 n=1		    Req/Sec    18.67      6.81    30.00     53.33%
+b=4096000 n=2		    Req/Sec    19.48      6.49    30.00     59.02%
+b=4096000 n=10		    Req/Sec    11.20      3.98    20.00     77.78%
+b=4096000 n=100		    Req/Sec     1.29      1.99    20.00     93.33%
+```",2062,2022-01-10T23:49:20Z,0
+190,kolbma,"> That the slowdowns aren't linearly correlated to content size is what makes this strange. The sharp edge at 4KiB makes me think it's some buffer that causes scheduling issues.
+
+This is the default chunk size in Rocket. But the window to 8430 is strange.  
+https://github.com/SergioBenitez/Rocket/blob/8cae077ba1d54b92cdef3e171a730b819d5eeb8e/core/lib/src/response/body.rs#L108",2062,2022-01-11T00:55:35Z,0
+191,kolbma,"If you change `DEFAULT_MAX_CHUNK` the window moves. So let's say you set it to 8430, the break down starts with 8431.  
+Can't see any special handling of this in Rocket code. This is based on hyper and h2. But I've already updated both crates to latest version without change.  
+I'll check this further out after some sleep...",2062,2022-01-11T01:58:08Z,0
+192,kolbma,"It doesn't work correctly after 8430 bytes count also!
+
+Look at the Net I/O output of httperf. This is much too slow.  
+```
+for b in 4060 4096 4097 8192 8430 12288 12500 ; do 
+    echo -n ""$b:  ""
+    httperf  --server localhost --port 8000 --uri /$b --num-calls 10 --num-conns 10 | grep ""Net I"" 
+done
+```
+With 3x max_chunk_size == 12288 bytes it is fast like with 4096 bytes and because of bigger ""file"" more effective in Net I/O.
+
+    4060:  Net I/O: 1409.4 KB/s (11.5*10^6 bps)
+    4096:  Net I/O: 1361.7 KB/s (11.2*10^6 bps)
+    4097:  Net I/O: 106.9 KB/s (0.9*10^6 bps)
+    8192:  Net I/O: 207.2 KB/s (1.7*10^6 bps)
+    8430:  Net I/O: 529.2 KB/s (4.3*10^6 bps)
+    12288:  Net I/O: 2553.8 KB/s (20.9*10^6 bps)
+    12500:  Net I/O: 836.6 KB/s (6.9*10^6 bps)
+
+Is there anything wrong with this? 
+https://github.com/SergioBenitez/Rocket/blob/8cae077ba1d54b92cdef3e171a730b819d5eeb8e/core/lib/src/ext.rs#L117
+
+Anyone an idea why it starts to become faster again after the additional 4334 bytes (4096 + 4334 = 8430)?  
+Or any other idea what might be the cause?
+
+I see there some more not really explainable differences in speed. Looks like there is some race condition and blocking.  
+How do you trace the polling of tokio crate?",2062,2022-01-11T12:38:07Z,0
+193,ssendev,"https://github.com/tokio-rs/console advertises itself as capable of it
+
+The fact that the delay is 40ms also made me think of this https://vorner.github.io/2020/11/06/40-ms-bug.html",2062,2022-01-11T13:00:02Z,0
+194,kolbma,"[http1_writev](https://docs.rs/hyper/latest/hyper/server/struct.Builder.html#method.http1_writev) disabled doesn't make a difference.  
+
+I've setup in the meantime some code for bare hyper which has the same functionality to respond to `GET /<size>`.   
+No problem in hyper.
+
+* hyper.sh port 3000 calls: 500 conns: 1
+    4097:  Net I/O: 23718.9 KB/s (194.3*10^6 bps)
+    4097:  Request rate: 5727.0 req/s (0.2 ms/req)
+
+I'm thinking about how the __keep_alive__ suits in the situation with different __byte counts__.
+Because it happens only when reusing the connection with e.g. 500 GET requests.
+
+4096 ok...  
+* rocket.sh port 8000 calls: 500 conns: 1
+    4096:  Net I/O: 19174.5 KB/s (157.1*10^6 bps)
+    4096:  Request rate: 4463.5 req/s (0.2 ms/req)
+
+4097 slow....
+* rocket.sh port 8000 calls: 500 conns: 1
+    4097:  Net I/O: 97.8 KB/s (0.8*10^6 bps)
+    4097:  Request rate: 22.8 req/s (43.9 ms/req)
+
+Creating 500 connections for each 1 GET request is ok...
+
+* rocket.sh port 8000 calls: 1 conns: 500
+    4097:  Net I/O: 7457.8 KB/s (61.1*10^6 bps)
+    4097:  Request rate: 1735.6 req/s (0.6 ms/req)
+
+But 250 connections each reused for a 2nd concurrent GET is a bottleneck...
+
+* rocket.sh port 8000 calls: 250 conns: 2
+    4097:  Net I/O: 98.1 KB/s (0.8*10^6 bps)
+    4097:  Request rate: 22.8 req/s (43.8 ms/req)
+
+There should be more req/s than with calls: 500 conns: 1, because there is lesser TCP connection overhead.",2062,2022-01-11T16:15:51Z,0
+195,kolbma,"So the time is lost in the concurrent call of
+
+https://github.com/SergioBenitez/Rocket/blob/8cae077ba1d54b92cdef3e171a730b819d5eeb8e/core/lib/src/server.rs#L280
+
+In my debug build and a connection with 2 requests, there is waited for one request about 290 milliseconds. The other request is about 2 or 3 milliseconds.
+
+The `handle` function 
+https://github.com/SergioBenitez/Rocket/blob/8cae077ba1d54b92cdef3e171a730b819d5eeb8e/core/lib/src/server.rs#L23
+I've stripped to...
+```
+Some(run().await)
+```
+to remove temporarily the unwinding stuff. 
+And the String handler itself is no culprit. It runs about 100 microseconds.
+
+In the blackbox part called by `route.handler.handle(request, data)` a lot of future pinning and unsafe memory handling whith a lot of safety info (the caller of method/function would need to make sure a requirement is fulfilled) is called to handle the async.  
+Need to see what is done by the codegen of Rocket there.
+",2062,2022-01-11T21:19:39Z,0
+196,kolbma,"After all the code inspection and code timings... I don't believe anylonger there is an issue in Rocket...
+
+If you check the network traffic and its timing, you'll see for 2 requests in one __keep-alive__ connection with content length __4096__
+
+![4096_calls2_conns1](https://user-images.githubusercontent.com/5228369/149154251-508cbba4-d731-41f7-87df-71772aa93b35.png)
+
+And for 2 requests in one __keep-alive__ connection with content length __4097__
+
+![4097_calls2_conns1](https://user-images.githubusercontent.com/5228369/149154245-1c3e6214-1cef-494d-9727-1f8b263027c2.png)
+
+The data inclusive proto overhead 4399 bytes is sent by Rocket server __always__ quickly after the GET request.  
+
+For content length __4096__ there is a single TCP segment, while for __4097__ there is a 2nd.  
+There might be the cause in the async handling between Rocket with its `max_chunk_size` and sending data via Hyper.  
+Just using Hyper directly, this is handled differently and it pushes the data also in a single TCP segment like with 4096 bytes.  
+But this is both ok.
+
+Back to whats going on...  
+You see in the bottom image that __frame 13__ is sent over __44ms behind frame 12__. So the server at port 8000 is waiting for the ACK from the client, which is here httperf.  
+The data has been seen by httperf more or less beamed in because the long awaited ACK has the same timestamp in echo (not on images).
+Looks like the benchmark tools doesn't handle __keep-alive__ correctly.  
+While the first request is ACKed correctly, it seems it waits for more data if there are multiple segments to fill up its own buffer. Although it could ACK the already received data.  
+For confirmation you can also set argument `--recv-buffer` to e.g. 1 and there is no slow down because of waiting on ACK.  
+What the value is exactly you set here, I don't know. If you set it too high (13000, 12000 is ok) I think it switches to default and the ACK won't work again.  
+But `httperf --recv-buffer 9000 --server localhost --port 8000 --uri /4097 --num-calls 2 --num-conns 1` works to get similar assembled frames like without the option, but correctly fast ACKed...
+
+![4097_calls2_conns1_recv-buffer-9000](https://user-images.githubusercontent.com/5228369/149176246-8eead2db-1a3f-4978-bfd3-58e04c48ac1b.png)
+
+* rocket.sh port 8000 calls: 1000 conns: 10
+    4096:  Net I/O: 1396.7 KB/s (11.4*10^6 bps)
+    4096:  Request rate: 325.1 req/s (3.1 ms/req)
+
+* rocket.sh port 8000 calls: 1000 conns: 10
+    4097:  Net I/O: 1332.6 KB/s (10.9*10^6 bps)
+    4097:  Request rate: 310.1 req/s (3.2 ms/req)
+
+With bigger byte counts there is still a problem with the tool...  
+For curiosity same __calls 4 conns 1__ sometimes slow but also fast...  
+
+* rocket.sh port 8000 calls: 4 conns: 1
+    8430:  Net I/O: 546.2 KB/s (4.5*10^6 bps)
+    8430:  Request rate: 64.0 req/s (15.6 ms/req)
+
+* rocket.sh port 8000 calls: 4 conns: 1
+    8430:  Net I/O: 2247.0 KB/s (18.4*10^6 bps)
+    8430:  Request rate: 263.5 req/s (3.8 ms/req)
+
+With only __3 calls__ it is always fast. With __5 calls__ it is always slow.  
+
+Problem is the same like above... if it is slow, over 44ms wait for ACK the received data.  
+But not already the 2nd request, here sometime the 4th but always the 5th.  
+With bytecount 8000 and recv-buffer 12000 it is always fast again...
+
+* rocket.sh port 8000 calls: 1000 conns: 10
+    8000:  Net I/O: 2169.0 KB/s (17.8*10^6 bps)
+    8000:  Request rate: 267.5 req/s (3.7 ms/req)
+
+All calls against debug build with timing output, so much slower as a release build of Rocket.",2062,2022-01-12T16:48:27Z,0
+197,rbtcollins,"@kolbma thats the 40ms bug that vorner wrote up
+
+ - if you set tcp_nodelay on the socket, the full response will reach the client without waiting for an ACK.
+OR
+- disabling delayed acks requires a per-recv() call, which is tedious, and disabling that is usually a problem anyway. 
+
+The issue here is the combination of small content *and* multiple packets. The writev setting having no effect may just mean that a similar thing is having a writev impact. I suggest a strace: if the syscalls being made by rocket apps split headers and body for small content this problem will occur.
+
+See https://en.wikipedia.org/wiki/Nagle%27s_algorithm and https://datatracker.ietf.org/doc/html/draft-minshall-nagle
+
+The answer is to ensure that userspace - rocket - always writes either a complete response, or at least a packet worth of data.",2062,2022-01-21T12:06:02Z,0
+198,kolbma,"@rbtcollins PR welcome!
+",2062,2022-01-23T00:50:47Z,0
+199,jsen-,"@net did you manage to combine `rocket` with eg. [websocket](https://crates.io/crates/websocket) on the same `host:port`?
+I'm trying to `upgrade` connection to `ws`, but no luck so far :(
+",90,2017-01-02T19:05:30Z,0
+200,SergioBenitez,This is indeed planned.,90,2017-01-03T03:18:29Z,0
+201,wagenet,@SergioBenitez got any suggestions for how one could manually add web socket support?,90,2017-05-01T23:03:17Z,0
+202,SergioBenitez,"@wagenet Do you mean to Rocket or to your web application? The former is subtle is it requires a lot of design work, but the latter should be straightforward. You should be able to use the [`websocket`](https://github.com/cyderize/rust-websocket) or [`ws-rs`](https://github.com/housleyjk/ws-rs) crates as they are intended. You won't be able to use the same port for both servers, of course. And, you'll need to spawn one of the two servers in a separate thread so that one server doesn't block the other one from starting. Should you choose to do this, your `main` function would look something like:
+
+```rust
+fn main() {
+    thread::spawn(|| {
+        listen(""127.0.0.1:3012"", |out| {
+            move |msg| {
+                out.send(msg)
+           }
+        })
+    })
+
+    rocket.ignite()..more()..launch()
+}
+```",90,2017-05-29T20:16:53Z,0
+203,wagenet,@SergioBenitez thanks :) I ended up discovering this sort of approach myself.,90,2017-05-30T21:26:23Z,0
+204,jhpratt,@SergioBenitez is this waiting on a future version of Rocket that migrates to Actix or some other async framework?,90,2019-02-20T02:41:28Z,0
+205,sparky8251,"Is there no way to add web socket support on the same port as HTTP?
+
+If not, this is quite problematic for me.",90,2019-02-24T03:21:49Z,0
+206,jhpratt,"@sparky8251 Not currently, at least easily.",90,2019-02-24T04:22:47Z,0
+207,sparky8251,"Well, that sucks. Liked the readability of Rocket but without the ability to have websockets on the same port Rocket is useless to me.
+
+Actix just doesnt have the same readability after all... 
+
+If you happen to know a way to do websockets on the same port, even if its not clean, I'd love to hear it. If I end up porting to Actix I won't be returning to Rocket but if I can make the websocket stuff work, hopefully I can stick around until native support lands.",90,2019-02-24T04:27:11Z,0
+208,jebrosen,"@sparky8251 nginx (""Since version 1.3.13"") should be able to forward to a second server on a per-location basis. The second server could even be another listening port connected to the same binary that's serving the rocket HTTP server (e.g. via https://github.com/SergioBenitez/Rocket/issues/90#issuecomment-304725055).
+
+I've made an example (completely untested so far, sorry) based on [the nginx example for WebSocket](https://nginx.org/en/docs/http/websocket.html):
+
+```
+http {
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    server {
+        listen 80 default server;
+        server_name example.com;
+
+        location /websocket/ {
+            proxy_pass http://localhost:8080;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+        }
+
+        location / {
+            proxy_pass http://localhost:8000;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+        }
+    }
+```
+
+I presume something similar can be done with Apache as well.",90,2019-02-24T17:27:46Z,0
+209,sparky8251,"Unfortunately, using nginx is a non-answer for my use case. I'd like to not need a 3rd party program to make this work.",90,2019-04-07T19:42:29Z,0
+210,VictorKoenders,"Hyper 0.12 supports websockets: https://github.com/hyperium/hyper/blob/master/examples/upgrades.rs
+
+Rocket is still on hyper 0.10 though, so we'll need to upgrade that dependency first
+
+Edit: which seems blocked on 0.5.0: https://github.com/SergioBenitez/Rocket/issues/17#issuecomment-415609486
+",90,2019-05-01T12:07:22Z,0
+211,fenhl,"With #1008 merged, would it make sense to start implementing websocket support on the async branch?",90,2019-08-30T17:22:30Z,0
+212,jebrosen,"I think we would need to see some progress on #1066 first - which reminds me, I need to write a bit more about that. And WebSocket support is also big enough that I'd like to see a hypothetical API design before going too far into implementation.",90,2019-08-30T18:04:31Z,0
+213,jhpratt,"WebSockets will certainly be one of the larger issues. I'm actually looking into the two main websocket crates (`ws` and `websocket`). `ws` is, frankly, a bit of a mess, and will be extremely difficult to upgrade to asynchronous. `websocket` already has support, though it's running on tokio 0.1 and hyper 0.10. I've just asked on an issue there to see what sort of changes will be accepted.
+
+While this wouldn't directly add websocket support to Rocket, it would allow for an asynchronous server that could be spawned on the same runtime.",90,2019-08-31T00:11:24Z,0
+214,jebrosen,"Actually, I don't think #1066 is necessary for this after all - it would help with SSE, but not websockets. Instead, websockets would likely have to be handled at the hyper-service or connection level with an API such as https://docs.rs/websocket/0.23.0/websocket/server/upgrade/async/trait.IntoWs.html.",90,2019-08-31T03:19:48Z,0
+215,schrieveslaach,"@jebrosen, based on your `async` branch I created a branch with rudimentary websocket support and I would like to contribute this new feature to rocket. 
+
+The first draft of the API looks likes this: 
+
+```rust
+let (tx, rx) = channel();
+
+std::thread::spawn(move || {
+    let duration = std::time::Duration::from_secs(1);
+    loop {
+        println!(""Sending message"");
+        tx.unbounded_send(Message{}).unwrap();
+        std::thread::sleep(duration);
+    }
+});
+
+let _ = rocket::ignite().receivers(vec![rx]).mount(""/"", routes![hello]).launch();
+```
+
+@SergioBenitez, @jebrosen, what do you think about this first implementation. 
+
+BTW: [here is the branch](https://github.com/schrieveslaach/Rocket/tree/websockets), implementing the behavior.",90,2019-10-13T16:47:44Z,0
+216,jebrosen,"My vague idea for a websocket API was to be able to do something like the following:
+
+```rust
+#[websocket(""/chat/<room>"")]
+async fn chat(room: String, conn: WebSocket) {
+    // let message = conn.recv().await;
+    // conn.send(message).await;
+}
+
+fn main() {
+    rocket::ignite().websocket(websocket![chat]);
+}
+```
+
+That is, have it work similarly and in parallel to `catcher`s and `route`s. It should also have a lower-level API like `Handler`. I'm not sure if we should support only Websocket or expose more flexibility in terms of other protocols via `Upgrade`.
+
+As far as I can tell your current implementation takes any number of receivers, and every message that comes on any receiver is sent to all connected clients - and that pattern is too limiting.",90,2019-10-19T17:37:17Z,0
+217,schrieveslaach,"Okay, that looks much nicer, but I have one question. If I understand your example correctly, wouldn't this require that Rocket run the `chat` function every `x` milliseconds? 
+
+> As far as I can tell your current implementation takes any number of receivers, and every message that comes on any receiver is sent to all connected clients - and that pattern is too limiting.
+
+This is not intended to be the final result of a future PR. It was just a very basic implementation to get it running. 
+
+Currently, I'm wondering if we could combine our API designs:
+
+```rust
+#[websocket(""/chat/<room>"")]
+async fn chat(room: String, msg: Message) -> Json<Value> {
+    // Will be invoced when rx emits a message and here you could 
+   // transform the message into a certain paylod.
+}
+
+fn main() {
+    let (tx, rx) = channel();
+
+    std::thread::spawn(move || {
+        let duration = std::time::Duration::from_secs(1);
+        loop {
+            println!(""Sending message"");
+            // Message could be a trait and here you could create a 
+            // text message (similar to websockets crate API)
+            tx.unbounded_send(Message{}).unwrap();
+            std::thread::sleep(duration);
+        }
+    });
+
+    rocket::ignite().websocket(vec![websocket!(chat, rx)]);
+}
+```
+",90,2019-10-21T07:36:46Z,0
+218,fenhl,"This API still seems very limited, since it wouldn't be able to send messages on its own, or respond to a message with multiple messages. There's also a lot of boilerplate in `main`, which seems like it would be unnecessary. A websocket handler that continues to handle the websocket connection for its entire lifetime, as in @jebrosen's example, would be ideal.",90,2019-10-21T08:02:23Z,0
+219,schrieveslaach,I'm a bit confused how you would receive message from a background process (imaging that you are receiving Kafka messages from another service in the background and want to update the UI through a websocket connection). Could you give me an example API?,90,2019-10-21T10:04:27Z,0
+220,fenhl,"It's hard to give a code example without knowing what the message producer API looks like, but it would probably involve [`State`](https://docs.rs/rocket/0.4.2/rocket/struct.State.html).",90,2019-10-21T10:32:34Z,0
+221,jebrosen,"I previously wrote a chat room example with async rocket and SSE, where the ""receiver"" endpoint looks like this: https://git.jebrosen.com/jeb/rocket-rooms/src/commit/381f93daaf17db1a430760f536ceb9699c33b2ea/src/main.rs#L34
+
+The websocket equivalent could end up looking something like this:
+
+```rust
+#[websocket(""/room/<room>"")]
+async fn chat_room(room: String, rooms: State<'_, Rooms<Message>>, socket: WebSocket) {
+    // Subscribe to the room. 'subscription' is a Stream of Messages.
+    let mut subscription = rooms.subscribe(&room).await;
+
+    // WebSockets are full duplex, and we want to read/write independently
+    let (tx, rx) = socket.split();
+
+    loop {
+        // TODO: I have no idea if select! actually works like this
+        futures::select! {
+            // New message from another client: send it to this one
+            server_msg = subscription => tx.send(server_msg).await,
+
+            // New message from this client: broadcast it to the others
+            client_msg = rx => rooms.send(&room, client_msg).await,
+
+            // TODO: error handling, shutdown, etc.
+        }
+    }
+}
+```
+
+The main thing this showcases is that neither sending nor receiving of messages is directly controlled by rocket, so the handler can receive from any source.",90,2019-10-21T14:26:04Z,0
+222,schrieveslaach,That example is the example I was looking for in order to understand what should be accomplished. At the weekend I'll have a look into it. ,90,2019-10-22T06:13:13Z,0
+223,nour-dev,any news about Websocket support with rocket ?,90,2020-02-20T20:10:20Z,0
+224,DrYSG,"@jebrosen 
+
+Can you say anything to compare:
+
+1. The work you did
+2. The work shown at: https://www.steadylearner.com/blog/read/How-to-start-Rust-Chat-App
+3. What are the cons/pros of native rocket support vs. the two above hybrid approaches?
+4. using Warp instead of Rocket (Warp has websockets)
+",90,2020-02-21T15:41:08Z,0
+225,jebrosen,"@DrYSG 
+
+1. I haven't done any actual work on websockets, other than provide an example for nginx that I have not tested myself. The purpose of that example is to map servers on two ports to look like they are on the same port.
+2. That example starts a websocket and a webserver app in the same process listening on two ports. It does not look like the two share data in any way; if needed, the two could communicate through some shared `Arc<Mutex<State>>` or channel(s).
+3. Native rocket support would mean that both HTTP and websocket would truly be handled by the same server listening on the same port, and it would simplify sharing state: the websocket routes could access the same managed state through the same mechanism as non-websocket routes.
+4. Warp's websocket support is the same kind as number 3 - the same server handles both plain and websocket requests.",90,2020-02-22T18:14:48Z,0
+226,rustrust,"see https://github.com/SergioBenitez/Rocket/issues/1238, the autobahn websocket test suite should be included as part of this effort",90,2020-02-22T19:58:16Z,0
+227,schrieveslaach,"I worked on native websocket support for Rocket (see my comments above). However, I did not had time to continue because I think it requires large extensions and maybe refactorings of Rocket (maybe a second kind of handler, as I tried to use [here](https://github.com/schrieveslaach/Rocket/commit/1b5bf1da1fc81c29cf972cf19b5b9cdf8fe6e112#diff-a9ea99dbf2f3bc38a7d7e4c36a99a288R297-R312)). Maybe, we could discuss this here?
+
+@rustrust, using a test suite would very beneficial. :+1: ",90,2020-02-23T11:12:00Z,0
+228,Yuhanun,Is there any update on when this is going to release? In a dire need for WebSocket endpoints.,90,2020-07-05T20:29:15Z,0
+229,howard0su,"I am thinking something different model as @jebrosen.
+
+We should still use the current routing logic but add a special responder, which will issue the upgrade response. In this new responder, the client application need supply async entry point which accept a websocket. The websocket logic runs as an async function and give the client application flexibility. This also enables one handler is able to reject the wrong websocket connection requests with the wrong parameters. Request Guard still works.
+
+
+",90,2020-08-06T01:13:07Z,0
+230,Voodlaz,I've got time to work on implementing websockets. What I can do now for implementing websockets?,90,2020-08-30T10:38:32Z,0
+231,Voodlaz,@jebrosen @SergioBenitez ?,90,2020-09-02T14:42:55Z,0
+232,jebrosen,"> I've got time to work on implementing websockets. What I can do now for implementing websockets?
+
+Since WebSocket (and HTTP upgrade in general) is a pretty significant API addition that also needs some internal changes, I expect several false starts or reworks of the design/implementation. I don't have any particular suggestions for a first step, but there are a lot of different areas to consider.
+
+
+Here's a very rough idea of what Rocket will need to do to handle an incoming WebSocket connection, which could be expanded on to make a complete design:
+
+1. Look for and validate the [client's WebSocket opening handshake](https://tools.ietf.org/html/rfc6455#section-4.2.1).
+2. In the case of a valid handshake, [do an HTTP upgrade](https://docs.rs/hyper/0.13.7/hyper/upgrade/index.html), [completing the server's WebSocket opening handshake](https://tools.ietf.org/html/rfc6455#section-4.2.2) instead of processing it like a normal HTTP request.
+3. Wrap the I/O in something that speaks the WebSocket protocol, such as `tokio-tungstenite` (or another crate).
+4. Run the appropriate route handler, passing it a `tokio_tungstenite::WebSocketStream` (or whichever type).
+
+This still leaves some significant open questions:
+* We likely want a new route attribute, like `#[websocket]`, and the changes to `Route` that go with it.
+* Should Rocket expose the HTTP upgrade mechanism directly, or should it implement WebSocket only, or should both be part of the API? My preference is ultimately ""both"", but we might have one be a public/stable API for a while before we expose the other.
+* The current request handling logic takes the incoming hyper `Body`, including the `.on_upgrade()` function needed for step 2 above, and encapsulates it into `Data`. We'll need to expose `on_upgrade` through `Data` and/or not use `Data` for routes that are an HTTP upgrade.
+* Do `on_request` fairings apply to websocket/upgrade routes? It seems likey they should, but they take an `&Data` which might be a problem.
+
+I think at this stage the biggest unknown is how much of the existing code needs to change to accommodate websockets/upgrade, and how many public APIs ""have to"" break. I haven't looked at it for a while, but the branch linked in <https://github.com/SergioBenitez/Rocket/issues/90#issuecomment-541434925> is a good start as far as answering those kinds of questions.",90,2020-09-06T22:40:41Z,0
+233,schrieveslaach,"@Voodlaz I tried to integrate websocket support but I had no time to continue. I was stuck at the point where I wanted to integrate websockets into the codegen of Rocket. Unfortunately, I couldn't find a good way to integrate the [second handler](https://github.com/schrieveslaach/Rocket/blob/1b5bf1da1fc81c29cf972cf19b5b9cdf8fe6e112/core/lib/src/handler.rs#L332) into tho codegen and I wasn't sure if I follow the right approach.",90,2020-09-20T19:44:59Z,0
+234,markazmierczak,"I have created a [pull-request](https://github.com/SergioBenitez/Rocket/pull/1441) with minimal support for WebSockets based on tungstenite crate and I am seeking for comments.
+It would be very helpful to know if this path is desired.
+
+Personally I am with @howard0su and I think `#[websocket(..)]` macro has drawbacks.
+E.g. there is no way to validate if `room` exists before accepting WebSocket connection.
+IMHO returning _404 Not Found_ is what is desired in case a room does not exist.
+
+Nevertheless, adding macro later is still the option and it is on my list.
+The very next step I want to take is to write Chat example with current approach.
+But before I dive into that I am looking forward to hear what you think about it.",90,2020-09-28T22:28:42Z,0
+235,ducharmemp,"So I played around with the above PR, big fan of how easy tungstenite is to use. Some thoughts:
+
+Rocket should probably handle the async task spawning and maybe teardown internally. With the approach in the PR I *think* a malicious user can connect to the server as many times as they want and hit some OS limits on open fds (haven't tested so kind of hand waving). 
+
+The approach in the PR also doesn't currently allow for sharing/grabbing the managed state from rocket or holding a ref from the request's state. I think doing that part is easy enough (adding a state field to some struct and copying the request's state field), the tricky bit is allowing the user to grab said state ad hoc or based on some factors. This is necessary if the user wants to use rocket to manage their databases, like I do. It's even trickier when considering how to make this feel like normal rocket.
+
+What I *think* might be a correct approach is something a bit more evented/callback based. Maybe something like
+
+```rust
+
+#[websocket(""/ws/chat"")]
+async fn chat(ws: Websocket) {
+    let (tx, rx) = unbounded_channel();
+    ws.on_message(|conn: &PgConnection| async move {
+       ... 
+       tx.send(""foo"").await;
+   });
+
+   rx.for_each(ws.on_send(|conn: &PgConnection| {....});
+}
+```
+
+No idea what that function should return since I'm on my phone and throwing around these ideas, but I think that basically it should not return until the websocket should get closed. The websocket macro should be a basic wrapper around the get macro and should set up the boilerplate for actually initializing the websocket and completing the handshake, and then spawning off to the decorated function. That spawn should take into account the number of already spawned clients and not spawn any more if there are too many (which would mean a 5xx error?). It would also be able to construct a Websocket instance which would need to hold onto the managed state from rocket until it gets dropped.
+
+These callbacks *could* then pass in args to the callbacks using the normal FromRequest impls, but maybe for purity/completeness there could be a FromWebsocket impl as well? 
+
+Apologies for anything a bit too out of whack or hard to parse, I'm on my phone atm and had some thoughts I wanted to jot down.",90,2020-11-27T04:15:37Z,0
+236,ducharmemp,"I did some work based on #1441 (have to amend the message so there's no more spam here, sorry!, and so I reflect both the work that I did and @markazmierczak's work), current ref here https://github.com/ducharmemp/Rocket/commit/94bd73d450b06a4a70b12ea48bccf054b331d952
+
+When I did some testing, there didn't seem to be much of a downside to delaying the on_upgrade call until after the response is sent, but I think I'll need to talk to someone more experienced with hyper and HTTP. Note that the above mentioned branch is very WIP, this still needs
+
+a) Local testing capabilities
+b) A macro to hide the Box::pin awfulness that exists in the example handler
+c) Cleanup of the handlers in general to not be a copy-pasted and tweaked version of the `lib/handlers.rs` traits/types
+d) Some nice way of fetching state from the global rocket instance that's a bit more hidden. 
+e) General cleanups for errors and documentation
+f) More design discussions to decide how to process messages (ex. should it be a callback based approach? Something more inline?)
+g) Limits and config for websockets, based in Rocket.toml
+
+I think having this surfaced as an initial GET request and a return of something that initiates an upgrade based on the response is important, this means that for a path of `#[get(""/foo/bar/<id>"")]` we can first validate if the id actually exists in a db and return the appropriate 4xx response code, killing the attempted connection before it even starts. This does mean that there will now be some state added to the Response type, which might not be what is wanted. 🤷  
+
+Also another thing to consider-- this currently keeps the request around for a long time, as long as the websocket is alive. This could be refactored to passing in a ref to the rocket instance, but since the user _might_ want some things off of the request object even after the initial handshake, I kept it around.",90,2020-12-14T04:43:12Z,0
+237,adhesivee,"I want to share another idea how to approach this.
+What I see with other framworks is that websocket sessions are handled by the framework itself. 
+
+For example, for this you could create an enum for this:
+```rust
+pub enum WebSocket {
+    Opened(Session),
+    TextMessage(Session, Message),
+    Closed(Session)
+}
+```
+
+Then we could define it similar as what have been proposed here earlier:
+```rust
+#[websocket(""/ws/chat"")]
+fn chat(ws: Websocket) {
+  match ws {
+        WebSocket::Opened(_) => {}
+        WebSocket::TextMessage(_, _) => {}
+        WebSocket::Closed(_) => {}
+    }
+}
+```
+The idea with above example is that after each action, the methods returns and will not wait.
+
+I think it will solve/help with some issues described above:
+- because of exhaustive match, users see directly all capabilities
+- using states could be used the same way as it is being used now, each time an action occurs, it will enter the method ""fresh"", it can then also fetch State how it is currently done
+- session in above example could hold a value to underlying capabilities of websocket channel for more control (if possible)
+
+One note, I am not that experienced in Rust. I don't know if this is ""idiomatic"" Rust, or that it may ""violate"" some rules. 
+But maybe a different view might help here.",90,2020-12-26T22:54:59Z,0
+238,the10thWiz,"@SergioBenitez I would like to work on this issue, and I have some ideas on how to implement this feature.
+
+I'm imagining an API that looks something like this: 
+
+```rust
+#[get(""/rooms/join/<name>"")]
+async fn join_room(name: String, app: State<'_, AppData>) -> Websocket {
+    Websocket::create(|ws| async {
+        ws.send(""example_message"").await?;
+        while let Some(message) = ws.recv().await {
+            ws.send(format!(""Recieved: {}"", message)).await?;
+        }
+        Ok(())
+    })
+}
+```
+
+This example sends an initial message, and responds to any message with a similar message, essetially just an echo. To set options, extensions and other important parts of the websocket connection, they would be configured on the websocket object, before returning it. If the websocket connection might fail because the endpoint might not exist, i.e. attempting to connect to a room that doesn't exist, you would return a `Result<Websocket, Status>`, similar to a normal response.
+
+The `Websocket::create` function signature would look something like:
+
+```rust
+impl Websocket {
+    fn create<F, T>(ws_task: F) -> Self where 
+        F: FnOnce(WebsocketChannel) -> T,
+        T: Future<Output = io::Result<()>> + Send + 'static;
+}
+```
+
+The `ws_task` parameter is a function that accepts a `WebsocketChannel` object, and returns a future, which returns a `io::Result<()>`. The `WebsocketChannel` implements methods for sending and recieving messages sent on the channel, and closes the channel when dropped. It would be responsible for the `hyper::upgrade::Upgraded` object that holds the underlying streams. Rocket would be responsible for calling and managing the lifetime of `ws_task`, which hopefully shouldn't be too hard.
+
+At this point, there would be no way to limit the number of concurrent open connections, beyond implementing it manually via a request guard or something similar. I think this is acceptable, and if such an implementation is desired by a large enough group of people, it could be added to `rocket_contrib`.
+
+The biggest issue remaining is the message data types. The RFC defines this in terms of Frames, but since a single message can be spread across multiple frames, it doesn't make sense to expose this detail to the user, rather we should provide a Message, which can be one or more frames. The websocket RFC defines Text (Utf-8) and Binary data types for a message, and I think a generic `Message` struct, which holds the raw payload as a `Vec<u8>`, along with the associated datatype sent by the client is the simplest awnser. A number of other objects, such as `String` could implment `From<Message>`, and the send/recv methods could use that to make converting a message into a useable form much easier. The RFC also defines a set of control frames, which almost certainly don't need to be exposed to the user. Close can be handled internally, and sent when appropriate, while Ping and Pong messages should be reasonably easily handled. It might make sense to provide a `ping` method on `WebsocketChannel`, which sends a Ping, and waits for the associated Pong.
+
+As for the internal API, I imagine that it might be simplest to expose the hyper upgrade mechanisms to a response, should they be desired. I imagine this would be an addition function on the `Responder` trait, with a default implementation. Essentially, rather than just calling `respond_to`, it would first call `upgrade`, and if that returns None, it would then call `respond_to`. The default implementation for `upgrade` just fails through to the respond_to method, which should make it backwards compatible. This would also allow custom http upgrades. I imagine such a method would look something liek:
+
+```rust
+fn upgrade(&self, _request: &'r Request<'_>) -> Option<Result<(Response<'o>, Box<dyn Future<Output = ()> + Unpin>), crate::http::Status>> {
+    None
+}
+```
+
+I imagine that the http upgrade mechanisms should be added to Rocket itself, but the Websocket implementation can be added to Rocket behind a feature flag, or to Rocket Contrib. Which would you prefer?
+
+Please let me know if this sounds like it could work. I am interested in implementing this into Rocket, and I don't want to spend too long working on it before I know it's good.'
+
+** EDIT: most of this is trash, don't bother reading it **",90,2021-05-04T00:07:50Z,0
+239,the10thWiz,"Actually, an interesting idea is something more like 
+
+```rust
+#[websocket(""/echo"")]
+async fn echo(message: Message, ws: Websocket, channel: WebsocketChannel) {
+    ws.send(message).await;
+}
+```
+
+The `Message` would contain the message sent (the user would have to extract the specified room if they need it),
+and the `Websocket` would contain a handle to the websocket that sent the message. The `WebsocketChannel` has a refernce to the larger websocket pool, and would have methods that allow the user to send to a whole room, or to any other open websocket. I don't think we actually need a special `websocket![]` macro, since we should be able to make it just work with the normal `routes![]` macro.
+
+The function would be called on every incomming message from a client connected to the endpoint. Since Websockets aren't quite like HTTP, I don't think it makes sense to have a return value, but allowing the user to return a Result of some type (probably whatever send returns) would allow the user to add `?`.
+
+`ws` and `channel` could probably be combined into a single object.",90,2021-05-07T00:28:39Z,0
+240,SergioBenitez,"For those watching: design discussions are taking place on Matrix. Here is my proposed API for websockets, by example:
+
+```rust
+//! A multiroom chat application with a special `echo` room which echoes its
+//! messages to `lobby`.
+
+// `&Channel`, `&Broker` are channel guards, provided by Rocket.
+// `&Broker` is additionally a request guard for sending messages from anywhere.
+//
+// A `Channel` is:
+//   1) A bidrectional channel between two endpoints: client and server.
+//   2) Linked to a topic URI, for broadcasting to that topic.
+//   3) A cache storer, like `&Request`. The cache is dropped on `leave`.
+//
+// A `Broker` knows about all channels.
+//
+// &Username is an application channel guard that asserts that the connection
+// sending a message has been granted the reflected username.
+
+type UserList = State<ConcurrentHashSet<String>>;
+
+enum Event<'r> {
+    /// A join with a requested `username` in `.0`.
+    Join(&'r str),
+    /// Message `.1` sent by user with username `.0`.
+    Message(&'r Username, &'r str),
+    /// User with username `.0` has left.
+    Leave(&'r Username),
+}
+
+/// A new client has connected to a room. Inform the room of this, say hello to
+/// the client with a ""join"" message.
+#[join(""/<_>"", data = ""<username>"")]
+fn join(channel: &Channel, username: &str, users: &UserList) {
+    if users.contains_or_add(username) {
+        channel.send(Event::Leave(""username taken"")).await;
+        return channel.close();
+    }
+
+    channel.local_cache(|| username.to_string());
+    channel.send(Event::Join(""hello!"")).await;
+    channel.broadcast(Event::Join(username)).await;
+}
+
+/// A message sent to a room that's not `echo`.
+#[message(""/<_>"", data = ""<msg>"")]
+fn room(channel: &Channel, user: &Username, msg: &str) {
+    channel.broadcast(Event::Message(user, msg)).await;
+}
+
+/// A message sent to `/echo`: send it to `/echo` and `/lobby` concurrently.
+#[message(""/echo"", data = ""<msg>"")]
+fn echo(broker: &Broker, channel: &Channel, user: &Username, msg: &str) {
+    let lobby_msg = channel!(broker, room(""/lobby"")).broadcast(Event::Message(user, msg));
+    let room_msg = channel.broadcast(Event::Message(user, msg));
+    join!(lobby_msg, room_msg).await;
+}
+
+/// A user has left a room. Let the room know.
+#[leave(""/<_>"")]
+fn leave(channel: &Channel, user: &Username, users: &UserList) {
+    users.remove(user);
+    channel.broadcast(Event::Leave(user)).await;
+}
+```",90,2021-05-16T19:38:36Z,0
+241,iMplode-nZ,So I guess there isn't any working prototype for this and I should just use the preexisting websocket thing mentioned above?,90,2021-06-20T02:13:03Z,0
+242,iMplode-nZ,Also maybe add `tungstenite` to the possible options?,90,2021-06-20T02:14:11Z,0
+243,ponyatov,"Can SocketIO.js on the client side be used as a fallback for Rocket in longpoll mode?
+Maybe it can be a more light variant requires much lesser implementation efforts, or using already existing infrastructure.",90,2021-09-01T13:36:07Z,0
+244,jebrosen,"> Maybe it can be a more light variant requires much lesser implementation efforts, or using already existing infrastructure.
+
+No; in fact this would probably require even more implementation efforts: Socket.IO uses its own protocol on top of long-polling and/or WebSockets, and the few rust implementations of socket.io servers I found appear to be ready or suitable for ""plugging in"" to Rocket at the moment.",90,2021-09-01T15:05:15Z,0
+245,the10thWiz,"> So I guess there isn't any working prototype for this and I should just use the preexisting websocket thing mentioned above?
+
+If you are interested, there is a pull request I've been working on to integrate websocket support directly into Rocket itself. However, I would caution against using it in production yet, since it's not quite ready yet.
+
+There are several option questions related to websocket support, and some serious testing need to happen. Since it sounds like you are implementing a service that uses websockets, how do you handle user authentication? I've implemented a solution that takes advantage of temporary URLs, but I'm curious to hear what your solution is.",90,2021-09-09T17:39:33Z,0
+246,iMplode-nZ,"Well for emulating WS via EventStream, I just send out a unique token and use that as the data field and use a custom eventstream impl on the client that supports payloads.",90,2021-09-09T21:46:12Z,0
+247,Kiiyya,"Looks like WebSockets are currently planned for the 0.8.0 milestone. Sounds it'll be a few years still, then?",90,2021-09-10T09:52:28Z,0
+248,hf29h8sh321,"[This proposed API](https://github.com/SergioBenitez/Rocket/issues/90#issuecomment-831610067) is the best IMO, since it offers the greatest flexibility. A channel-based API may be too limiting for certain use cases.",90,2021-11-13T23:34:32Z,0
+249,TimBoettcher,"Did the design discussions get anywhere? I have a feeling this is a highly anticipated feature, and I myself would appreciate it for my app, too, but it looks like it's not feasible to implement for the time being?
+
+Another question: Does rocket somehow expose internal state? Because if I run a separate server for WS handling (eg. with [tokio-tungstenite](https://crates.io/crates/tokio-tungstenite)), I'd need to somehow get the internal state and possibly DB pool of the rocket app, I think.",90,2021-12-07T11:10:23Z,0
+250,toxeus,@TimBoettcher I recommend reading up the [discussion on the PR](https://github.com/SergioBenitez/Rocket/pull/1639#issuecomment-924899064) to get an idea about alternatives and why rocket cannot be used with tokio-tungstenite. ,90,2021-12-07T15:30:24Z,0
+251,tvallotton,"What I really like about [this proposal](https://github.com/SergioBenitez/Rocket/issues/90#issuecomment-831610067) is that is the one that is most consistent with Rockets current API. Macros and guards generally deal with request from the user, while the response is dealt by the return type . Here `Websocket` would be just an ordinary type that implements `Handler`. ",90,2021-12-08T02:14:07Z,0
+252,hf29h8sh321,I've seen [this crate](https://crates.io/crates/hyper-tungstenite) which might provide a somewhat easy way to provide an implementation.,90,2022-01-23T01:13:45Z,0
+253,benny-n,"Is using Rocket 0.4.10 version a constraint for you? Because if not, you should consider upgrading to the rocket master branch. It is possible to use the mongo driver 2.0.0 on the master branch (Those are the dependencies that I am currently using in my project) with some boilerplate code that will be not be needed anymore when PR SergioBenitez/Rocket#1887 is merged.",1944,2021-10-13T12:05:40Z,0
+254,oren0e,@benny-n Thanks for the reply. I'm more interested in an example or some kind of info to help me achieve the simple implementation I had described. Using the newest driver is a means to an end not the goal.,1944,2021-10-13T12:21:35Z,0
+255,benny-n,"@oren0e I see.
+This is what works for me with Rocket on master and mongodb 2.0.0 :
+
+```rust
+use std::time::Duration;
+use std::ops::Deref;
+use mongodb::{Client, options::ClientOptions};
+pub use bson::{Document, doc};
+pub use rocket_db_pools::{Config, Connection, Database, Error as PoolsError, Pool};
+pub use rocket::{State, http::Status, figment::Figment, serde::json::Json};
+
+pub struct ClientUnit(Client);
+
+// Optional just to not drag "".0."" syntax everywhere
+impl Deref for ClientUnit{
+    type Target = Client;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Database)]
+#[database(""db_name"")]
+pub struct Db(ClientUnit);
+
+// Boilerplate code which will not be needed when PR #1887 is merged
+#[rocket::async_trait]
+impl Pool for ClientUnit {
+    type Error = PoolsError<mongodb::error::Error, std::convert::Infallible>;
+
+    type Connection = Client;
+
+    async fn init(figment: &Figment) -> Result<Self, Self::Error> {
+        let config = figment.extract::<Config>()?;
+        let mut opts = ClientOptions::parse(&config.url).await.map_err(PoolsError::Init)?;
+        opts.min_pool_size = config.min_connections;
+        opts.max_pool_size = Some(config.max_connections as u32);
+        opts.max_idle_time = config.idle_timeout.map(Duration::from_secs);
+        opts.connect_timeout = Some(Duration::from_secs(config.connect_timeout));
+        Ok(ClientUnit(Client::with_options(opts).map_err(PoolsError::Init)?))
+    }
+
+    async fn get(&self) -> Result<Self::Connection, Self::Error> {
+        Ok(self.0.clone())
+    }
+}
+
+pub const DB_NAME : &str = ""db_name"";
+pub const COLL_NAME : &str = ""coll_name"";
+
+//Example for a route handler
+#[get(""/all"")]
+pub async fn get_all(conn: Connection<Db>) -> Result<Json<Document>, Status> {
+    match conn.database(DB_NAME)
+        .collection::<Document>(COLL_NAME)
+        .find(None, None)
+        .await
+        {
+            Ok(cursor) => unimplemented!(),
+            Err(_) => unimplemented!(),
+        };
+}
+```
+
+Also in Rocket.toml I have:
+```toml
+# Configuration for debug mode
+[debug.databases.db_name]
+url = ""<url-for-debug>""
+
+# Configuration for release mode
+[release.databases.db_name]
+url = ""<url-for-release>""
+```
+
+Relevant dependencies for the code above:
+```toml
+mongodb = { version = ""2.0.0""}
+bson = ""2.0.0""
+serde = { version = ""1.0"", features = [""derive""] }
+serde_json = ""1.0""
+rocket = {git = ""https://github.com/SergioBenitez/Rocket.git"", features = [""json"", ""secrets""]}
+rocket_db_pools = {git = ""https://github.com/SergioBenitez/Rocket.git""}
+```
+Some of these are probably not relevant to you but I chose to list them anyway if you wanted to try and make the example work as is. I hope this helps you!",1944,2021-10-13T13:10:22Z,0
+256,oren0e,"Thank you very much, I eventually made it work with the rocket 0.4 version and mongodb 2.0.0 version by figuring out how to implement the `FromRequest` trait, as well as realizing that the managed type in `rocket::ignite()` should have been `mongodb::sync::Client` (because I use sync) instead of my struct that contains the client.  
+
+Your example seems the way to go though, so I might switch, but I don't like that the crate comes from master on git instead of crates.io. Because it is still an rc version, it's not appropriate to use in production systems.
+
+This is what I ended up doing:
+```rust
+impl<'a, 'r> FromRequest<'a, 'r> for MongoDB {
+    type Error = ();
+
+    fn from_request(request: &'a Request<'r>) -> Outcome<MongoDB, ()> {
+        let client = request.guard::<State<Client>>()?;
+        let uri = &env::var(""MONGO_URI"").expect(""MONGO_URI environment variable must be set"");
+        let db_name = &env::var(""DB_NAME"").expect(""DB_NAME environment variable must be set"");
+        let collection = &env::var(""MONGO_COLLECTION"")
+            .expect(""MONGO_COLLECTION environment variable must be set"");
+        Outcome::Success(MongoDB {
+            client: MongoClient {
+                client: client.clone(),
+                uri: uri.to_string(),
+                db_name: db_name.to_string(),
+                collection: collection.to_string(),
+            },
+        })
+    }
+}
+
+impl Deref for MongoDB {
+    type Target = Client;
+
+    fn deref(&self) -> &Self::Target {
+        &self.client.client
+    }
+}
+```
+and changed the init to:
+```rust
+impl MongoDB {
+    pub fn init() -> Result<Self, MongoDBError> {
+        let uri = &env::var(""MONGO_URI"").expect(""MONGO_URI environment variable must be set"");
+        let db_name = &env::var(""DB_NAME"").expect(""DB_NAME environment variable must be set"");
+        let collection = &env::var(""MONGO_COLLECTION"")
+            .expect(""MONGO_COLLECTION environment variable must be set"");
+        let client = MongoClient::init(uri, db_name, collection)?;
+        Ok(Self { client })
+    }
+    pub fn get_all_issues(&self) -> Result<Vec<IssueType>, MongoDBError> {
+        self.client.get_all_documents()
+    }
+}
+```
+Then, in `rocket::ignite()` I use it like this:
+```rust
+let mongo = MongoDB::init().expect(""Failed to initialize MongoDB"");
+...
+rocket::ignite()
+...
+...
+.manage(mongo.client.client)
+```
+
+**Ending Remarks**
+Despite the fact I made it work, it took me couple of days of total confusion sorting through the documentation of different versions of both packages (rocket and mongodb, but mainly rocket) just to figure out how to use them together. If anyone of the maintainers is reading this, please consolidate the documentation and of course it will be great to merge https://github.com/SergioBenitez/Rocket/pull/1887",1944,2021-10-14T05:41:20Z,0
+257,matthewrobertbell,"Hello,
+
+A while ago I needed to use MongoDB 2.0.0 with Rocket 0.5-rc, so I came up with this proof of concept. Posting it partially in case it is helpful to others, but also to find out if there is a disadvantage to this method compared to pooling above? (disclaimer: I don't have much Rocket experience)
+ 
+```
+#[macro_use]
+extern crate rocket;
+
+use mongodb::Client as MongoClient;
+use rocket::State;
+use rocket::serde::json::Json;
+
+#[get(""/"")]
+async fn hello(client: &State<MongoClient>) -> Result<Json<Vec<String>>, ()> {
+    let databases = client
+        .list_database_names(None, None)
+        .await
+        .map_err(|_| ())?;
+
+    Ok(Json(databases))
+}
+
+#[rocket::main]
+async fn main() -> anyhow::Result<()> {
+    let client = MongoClient::with_uri_str(
+        ""mongodb://localhost"",
+    )
+    .await?;
+
+    rocket::build()
+        .manage(client)
+        .mount(""/"", routes![hello])
+        .launch()
+        .await?;
+    Ok(())
+}",1944,2021-10-16T17:42:29Z,0
+258,SergioBenitez,Why not name the function `Hello`?,1872,2021-08-31T01:53:01Z,0
+259,cataggar,"That was a bad example. Here is a more complete example. I have some routes like:
+
+``` rust
+pub fn routes() -> Vec<rocket::Route> {
+    routes![
+        operations::list,
+        locations::check_trial_availability,
+        locations::check_quota_availability,
+        private_clouds::list,
+        private_clouds::list_in_subscription,
+        private_clouds::get,
+        private_clouds::create_or_update,
+        private_clouds::update,
+        private_clouds::delete,
+        clusters::list,
+        clusters::get,
+        clusters::create_or_update,
+        clusters::update,
+        clusters::delete,
+        private_clouds::list_admin_credentials,
+        hcx_enterprise_sites::list,
+        hcx_enterprise_sites::get,
+        hcx_enterprise_sites::create_or_update,
+        hcx_enterprise_sites::delete,
+        authorizations::list,
+        authorizations::get,
+        authorizations::create_or_update,
+        authorizations::delete
+    ]
+}
+```
+
+I want the route name for function `operations::list` to be [Operations_List](https://github.com/Azure/azure-rest-api-specs/blob/21ffb64fdcbc0da039117af64f13c028c20d1286/specification/vmware/resource-manager/Microsoft.AVS/stable/2020-03-20/vmware.json#L103) instead of `list`.",1872,2021-08-31T03:13:23Z,0
+260,SergioBenitez,"For what reason? What are you gaining, exactly?",1872,2021-08-31T03:15:47Z,0
+261,cataggar,`operationId` is what we use to name each route. I'm able to test all method + uri combinations route correctly to an operationId.,1872,2021-08-31T03:27:24Z,0
+262,kolbma,"Why you don't use `handler` and a custom mapping during the test?  
+Runtime code then doesn't have to handle stuff you need for a test.",1872,2022-01-23T14:24:18Z,0
+263,kolbma,I think the other way makes more sense... See https://github.com/SergioBenitez/Rocket/pull/1912,1871,2022-01-23T14:29:11Z,0
+264,SergioBenitez,Thanks for fixing this. Could you add a test to the example to ensure the message is there? You should be able to find a similar test in the cookies related example. ,1843,2021-08-25T19:20:41Z,0
+265,xelivous,"I originally thought to leave out the testing since that's getting into weird brittle UI testing domain, and it's a little jank to do without an html parsing library, but for an example it's probably fine.
+
+I added some asserts to the `test_bad_form_submissions` test as it was already pushing some invalid data around, and also tested to ensure the flash message disappears upon a reload.",1843,2021-08-25T20:09:01Z,0
+266,kolbma,"We definitely don't want to `clone` the pool here.  
+What is the usecase to access the pool?",1972,2022-01-22T11:07:57Z,0
+267,threema-danilo,"Cloning the pool only increments a reference count and is thus cheap, right?
+
+The use case is an application where a request launches multiple background worker threads that need database access. Every thread needs its own connection, and a connection cannot be cloned. However, the pool can be cloned and it's cheap to do so. By passing a clone of the pool (i.e. a reference to the pool) to every worker thread, the thread an fetch its own connection.",1972,2022-01-24T08:32:53Z,0
+268,kolbma,"Ok, understand, will look at it in detail. Thanks.",1972,2022-01-24T09:16:05Z,0
+269,kolbma,"In conflict with https://github.com/SergioBenitez/Rocket/pull/1976  
+thx also @johananl 
+I pulled it in with https://github.com/kolbma/Rocket/commit/e4931d2f1e4ca5a92f7904d768fb9e1350403fa1",1883,2022-01-22T17:27:22Z,0
+270,jkbbwr,"Strongly disagree with this, services should deploy safe by default. 
+If you forget configuration, that is on you.",2091,2022-01-28T14:08:11Z,0
+271,SergioBenitez,Please switch to a branch or tag that corresponds to the version of Rocket you're using. You're looking at the code on master but using 0.5-rc. ,1771,2021-07-16T06:40:38Z,0
+272,mofengme,The  `cookies` example on both the `master` branch or the `0.5-rc` branch are the same,1771,2021-07-16T06:47:14Z,0
+273,SergioBenitez,"The branch is not the same as a tag. A tag marks a release. A branch marks progress in a series of releases. The 0.5-rc branch is the current progress in the 0.5-rc series of releases, _not_ a snapshot of a release. You want to look at the 0.5.0-rc.1 tag. ",1771,2021-07-16T07:03:51Z,0
+274,mofengme,"Ok, thanks for the info",1771,2021-07-16T07:38:44Z,0
+275,blackghost1987,"This is not a typo, this is intended, see: https://github.com/SergioBenitez/Rocket/pull/1800
+
+The italic formatting is trying to show that it's not a word, but a special shorthand. Maybe a bold style or some extra explanation in parenthesis would be better. Or maybe an ""alt"" like pop-up explanation message? There were like 3 pull requests on this already so changing it might worth considering...",2096,2022-01-30T10:00:11Z,0
+276,admwrd,"Ah, I see. Thanks for pointing this out. 
+
+So there are a few options I see that can be taken.
+
+1. It could be left as-is, but potentially trip up others unfamiliar with mathematical/logic terminology.
+2. It could be expanded to _if and only if_ 
+3. It could be left as _iff_ but perhaps link to the Wikipedia or some other explanation of the term. Something like:
+  * > In other words, a type is a data guard _[iff](https://en.wikipedia.org/wiki/If_and_only_if)_ it implements `FromData`.
+
+I've updated my commit to the third option, but happily leave the decision to the repo owners' discretion. 
+
+I've also updated the title of this MR to match the current intent.",2096,2022-01-30T21:21:17Z,0
+277,SergioBenitez,Please see the [response section of the guide](https://rocket.rs/guide/responses/). This has answers to your question and much more.,253,2017-04-11T03:43:09Z,0
+278,sbwtw,"@SergioBenitez I see the tutorial, I means how to return a Template in some case, and return Redirect in other.
+
+should i write a response wrapper contains Redirect and Template, and impl the Responder trait?",253,2017-04-11T05:20:31Z,0
+279,sbwtw,"I got the answer. just return `Result<Response<'static>, Status>`",253,2017-04-11T05:29:52Z,0
+280,SergioBenitez,"You should be returning `Result<Template, Redirect>` in your example. You should very, very rarely return a `Response` directly. ",253,2017-04-11T06:44:24Z,0
+281,sbwtw,"but i think sometimes need two different successful Response, like this:
+```
+if xxx {
+    return Redirect; // success and do redirect.
+} else if xxx {
+    return Template; // success and render a template to display.
+} else {
+    return Err; // fail
+}
+```",253,2017-04-11T06:50:35Z,0
+282,SergioBenitez,"@sbwtw That would require something like an `Either` type. Then you could return a `Result<Either<Redirect, Template>, Error>`. Unfortunately Rust doesn't have an `Either` type in the standard library, but it's trivial to implement one.",253,2017-04-11T22:11:12Z,0
+283,sbwtw,"yes, so thats a reason i use `Response` directly. i think if we have a example in tutorial to show this is very helpful.",253,2017-04-12T01:01:35Z,0
+284,mehcode,I use https://crates.io/crates/either @sbwtw; it works nicely. For something more complicated you should probably use your own enum type.,253,2017-04-12T03:09:30Z,0
+285,sbwtw,thanks @mehcode I will try this.,253,2017-04-12T08:44:40Z,0
+286,Korvox,Anyone got an example of using Either in handler return types?,253,2017-11-09T15:18:23Z,0
+287,raboof,"@Korvox I've added such a sample as a PR to the docs at https://github.com/SergioBenitez/Rocket/pull/493, let me know if you have any comments or an idea for a more representative example!",253,2017-12-18T13:56:08Z,0
+288,ctxkiwi,"Hello, i also had this problem and i'm kinda disappointed that people put so little effort in posting decent examples here and in the rocket docs. Anyway, here's my solution, but i only started learning rust yesterday, so sorry if it's bad code.
+
+responses.rs
+```rust
+
+use rocket_contrib::Template;
+use rocket::response::{Redirect, Responder, Response};
+use rocket::request::{Request};
+use rocket::http::{Status};
+
+pub struct AnyResponse {
+    resType: &'static str,
+    template: Option<Template>,
+    redirect: Option<Redirect>
+}
+
+impl AnyResponse{
+    fn getDefault() -> Self {
+        AnyResponse{ resType: """", template: None, redirect: None }
+    }
+    pub fn template (temp: Template) -> Self {
+        let mut res = AnyResponse::getDefault();
+        res.resType = ""template"";
+        res.template = Some(temp);
+        return res
+    }
+    pub fn redirect (redi: Redirect) -> Self {
+        let mut res = AnyResponse::getDefault();
+        res.resType = ""redirect"";
+        res.redirect = Some(redi);
+        return res
+    }
+}
+
+impl Responder<'static> for AnyResponse {
+    fn respond_to(self, req: &Request) -> Result<Response<'static>, Status> {
+        if self.resType == ""template"" {
+            return Some(self.template).respond_to(req)
+        }
+        return Some(self.redirect).respond_to(req)
+    }
+}
+```
+
+main.rs
+```rust
+use std::collections::HashMap;
+mod responses;
+
+fn empty_hashmap() -> HashMap<String, String> {
+    HashMap::<String, String>::new()
+}
+
+#[get(""/"")]
+fn index(mut cookies: Cookies) -> responses::AnyResponse {
+    let uid = cookies.get_private(""user_id"");
+    if uid == None {
+        return responses::AnyResponse::redirect(Redirect::to(""/login""))
+    }
+    return responses::AnyResponse::template(Template::render(""app"", empty_hashmap()))
+}
+```
+",253,2018-04-10T12:02:55Z,0
+289,Giesch,"For the benefit of anyone else coming here from google:
+
+It seems like the most ergonomic way to do this in v0.4 is to make an enum for your response or error type, and derive Responder, as documented here:
+https://rocket.rs/v0.4/guide/responses/#custom-responders
+https://api.rocket.rs/v0.4/rocket_codegen/derive.Responder.html
+
+So you can do something similar to AnyResponse like this:
+```rust
+use rocket::http::Cookies;
+use rocket::response::Redirect;
+use rocket_contrib::templates::Template;
+use std::collections::HashMap;
+
+#[derive(Debug, Responder)]
+pub enum ExampleResponse {
+    Template(Template),
+    Redirect(Redirect),
+}
+
+#[get(""/example"")]
+pub fn example(mut cookies: Cookies) -> ExampleResponse {
+    if let Some(user_id) = cookies.get_private(""user_id"") {
+        let ctx: HashMap<...> = HashMap::new();
+        // add something to ctx with user id
+        return ExampleResponse::Template(Template::render(""app"", ctx));
+    }
+
+    return ExampleResponse::Redirect(Redirect::to(""/login""));
+}
+```",253,2019-09-17T18:58:49Z,0
+290,mhfowler,"is this still the easiest way to do this in rocket 0.5 or is there any new syntax to make this easier?
+
+> For the benefit of anyone else coming here from google:
+> 
+> It seems like the most ergonomic way to do this in v0.4 is to make an enum for your response or error type, and derive Responder, as documented here: https://rocket.rs/v0.4/guide/responses/#custom-responders https://api.rocket.rs/v0.4/rocket_codegen/derive.Responder.html
+> 
+> So you can do something similar to AnyResponse like this:
+> 
+> ```rust
+> use rocket::http::Cookies;
+> use rocket::response::Redirect;
+> use rocket_contrib::templates::Template;
+> use std::collections::HashMap;
+> 
+> #[derive(Debug, Responder)]
+> pub enum ExampleResponse {
+>     Template(Template),
+>     Redirect(Redirect),
+> }
+> 
+> #[get(""/example"")]
+> pub fn example(mut cookies: Cookies) -> ExampleResponse {
+>     if let Some(user_id) = cookies.get_private(""user_id"") {
+>         let ctx: HashMap<...> = HashMap::new();
+>         // add something to ctx with user id
+>         return ExampleResponse::Template(Template::render(""app"", ctx));
+>     }
+> 
+>     return ExampleResponse::Redirect(Redirect::to(""/login""));
+> }
+> ```
+
+",253,2021-11-08T13:33:39Z,0
+291,Foorack,"> ```rust
+> 
+> #[derive(Debug, Responder)]
+> pub enum ExampleResponse {
+>     Template(Template),
+>     Redirect(Redirect),
+> }
+> ```
+
+Just ran into this today, am I missing something fundamental? Deeply disappointed over how there is no `-> AnyResponse` or `-> Response` return type. Forcing everyone to define their own enum for this is unnecessary boilerplate.",253,2021-12-21T22:58:33Z,0
+292,PorkSausages,"For anybody trawling through Google trying to figure this out - I don't know if it's the ""correct"" way to do things, but returning `status::Custom<T>` is the least painful way of handling responses that I can find. 
+
+Example:
+```rust 
+#[post(""/endpoint"", data = ""<mydata>"")]
+pub fn endpoint(mydata: Json<MyData>) -> status::Custom<String> {
+    match some_validation(&mydata) {
+        Ok(_) => status::Custom(Status::Ok, String::from(""Everything is OK!"")),
+        Err(e) => status::Custom(Status::BadRequest, String::from(""Everything is not OK!"")),
+    }
+}",253,2022-01-31T09:23:56Z,0
