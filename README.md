@@ -31,8 +31,8 @@ Execute the Code/MSR2022.ipynb file.
 Note: A list of repositories and a GitHub API token has to be provided in the notebook immediately after the imports for querying
 
 # Description:
-The script will query the repositories given in the list of repositories using Perceval, extracts the required data and stores it in < owner >_< repo >.csv format in /Data/ folder. 
+1. The script will query the repositories given in the list of repositories using Perceval, extracts the required data and stores it in < owner >_< repo >.csv format in /Data/ folder. 
         
-Then the user need to enter the file name < owner > _ < repo >.csv for which they need to predict the type of the account using BoDeGHa's trained machine learning classifier. The corresponding predictions will be stored in \Predicitons\ folder under < owner > _ < repo >.csv filename.
+2. The user can change the set of repositories for which they need to predict the type of the account using BoDeGHa's trained machine learning classifier. By default, all the recently queried repositories will be considered for prediction. The corresponding predictions will be stored in \Predicitons\ folder under < owner > _ < repo >.csv filename.
 
-Then the user need to enter a list of filenames in \Predicitons\ folder that need to be visualized using Kibana. Finally, follow the instructions given under Visualization section to work with Kibana.  
+3. The user need to enter a list of filenames in \Predicitons\ folder that need to be visualized using Kibana. Finally, follow the instructions given under Visualization section to work with Kibana.  
