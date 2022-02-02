@@ -2326,24 +2326,10 @@ And ready for review.",4385,2022-01-14T17:50:32Z,0
 539,LEXUGE,I can reproduce here.,4435,2022-01-28T07:41:56Z,0
 540,Darksonn,"Sorry about that. It will be fixed by #4437, which I will release as soon as possible.",4435,2022-01-28T08:43:39Z,0
 541,Darksonn,We are currently preparing a release in #4438.,4435,2022-01-28T09:08:29Z,0
-542,carllerche,@Darksonn How would we add an API in the future for spawning tasks that *don't* abort when the set is dropped?,4335,2021-12-21T19:44:20Z,0
-543,Noah-Kennedy,"Considering that task set is going to be used a lot for resource cleanup and management, we probably want something along the lines of a `fn shutdown(self) -> impl Future<()>` that aborts all of the tasks and waits for them to finish, so that users can await the termination of the tasks on the set.",4335,2021-12-21T20:02:48Z,0
-544,Darksonn,How should we handle panics in the sub-tasks when the user has called `shutdown`?,4335,2022-01-10T10:34:37Z,0
-545,carllerche,"""clean shutdown"" is a good call.
-
-What I would probably do is a call to `shutdown()` aborts remaining tasks, but there *may* be some tasks that have since completed (either successfully or w/ a panic). The user of `TaskSet` would then continue to drain results until `None`. Once `None` is reached, then no more tasks will complete and the `TaskSet` can be shutdown.
-
-This is a similar strategy as the `mpsc` channel, which maps pretty well to this case.",4335,2022-01-10T16:33:45Z,0
-546,Noah-Kennedy,I'm in agreement with Carl here. It would be best not to propagate the panics.,4335,2022-01-11T02:48:42Z,0
-547,Darksonn,"I have reworked the `IdleNotifiedSet` to guarantee that the value stored in an entry is dropped when the entry is removed from the set. If a value isn't destroyed when the entry is dropped, then that's a ref-cycle because the entry holds a `JoinHandle` to the task, but the task holds a waker to the entry.
-
-I'm also adding a test for the coop budget as I realized that `join_one` didn't correctly handle it before I reworked `IdleNotifiedSet`.",4335,2022-01-24T12:01:36Z,0
-548,carllerche,cc @seanmonstar @hawkw ,4335,2022-01-24T18:11:54Z,0
-549,Noah-Kennedy,"This seems about ready. I left a few questions and comments, but I don't think they block a merge here.",4335,2022-01-26T17:51:31Z,0
-550,Darksonn,"And indeed I think we should swallow the panic here. The reason is that panics in tasks are delivered to the user via the `JoinHandle`, so if the user has thrown the `JoinHandle` away, then they have told us they don't want the panic.",4430,2022-01-27T21:41:08Z,0
-551,BraulioVM,Done? ,4430,2022-01-28T16:16:04Z,0
-552,Darksonn,"Yeah, I didn't merge immediately because CI was still running.",4430,2022-01-28T16:20:49Z,0
-553,Grubba27,"Hello there,  this is a good first issue ? seems like i only have to change 
+542,Darksonn,"And indeed I think we should swallow the panic here. The reason is that panics in tasks are delivered to the user via the `JoinHandle`, so if the user has thrown the `JoinHandle` away, then they have told us they don't want the panic.",4430,2022-01-27T21:41:08Z,0
+543,BraulioVM,Done? ,4430,2022-01-28T16:16:04Z,0
+544,Darksonn,"Yeah, I didn't merge immediately because CI was still running.",4430,2022-01-28T16:20:49Z,0
+545,Grubba27,"Hello there,  this is a good first issue ? seems like i only have to change 
 
 ```rust
 #![cfg(feature = ""full"")]
@@ -2355,8 +2341,8 @@ for:
 ```
 
  right ? if there is something beside this ?",4341,2022-01-28T12:22:33Z,0
-554,Darksonn,"Yeah, that seems like it would fix it.",4341,2022-01-28T12:24:36Z,0
-555,Grubba27,"In stream_timeout if i use time or default it gives me errors on tests
+546,Darksonn,"Yeah, that seems like it would fix it.",4341,2022-01-28T12:24:36Z,0
+547,Grubba27,"In stream_timeout if i use time or default it gives me errors on tests
 other options are ok?:
 ```rust
 net = [""tokio/net""]
@@ -2365,45 +2351,45 @@ fs = [""tokio/fs""]
 sync = [""tokio/sync"", ""tokio-util""]
 signal = [""tokio/signal""]
 ```",4341,2022-01-28T13:57:13Z,0
-556,Darksonn,"Pick a feature or combination of features that works. You can list several features like this:
+548,Darksonn,"Pick a feature or combination of features that works. You can list several features like this:
 ```Rust
 #![cfg(all(feature = ""time"", feature = ""sync"", feature = ""io-util""))]
 ```",4341,2022-01-28T14:19:36Z,0
-557,Grubba27,"With multiple features all tests in local ran smoothly, adjusting PR and linking here",4341,2022-01-28T14:29:58Z,0
-558,Grubba27,"Thx btw, did not knew that could be done, multiple features at once in this manner",4341,2022-01-28T14:31:03Z,0
-559,Grubba27,PR is in this [link](https://github.com/tokio-rs/tokio/pull/4441/files),4341,2022-01-28T14:31:43Z,0
-560,Darksonn,It appears that the test does not compile. You will probably have to fix it.,4441,2022-01-28T14:41:08Z,0
-561,Grubba27,I think was only a wrong import that was we did not see because we were not running these tests,4441,2022-01-28T16:25:49Z,0
-562,Darksonn,I _did_ test locally that this fails before the bugfix.,4443,2022-01-28T17:28:37Z,0
-563,biluohc,Please continue to review @Darksonn ,4436,2022-01-28T09:43:19Z,0
-564,Darksonn,It seems reasonable to me.,4436,2022-01-28T09:48:40Z,0
-565,biluohc,"ok, thanks you very much",4436,2022-01-28T09:51:27Z,0
-566,LucioFranco,"This looks like an oversight in the docs, `Receiver` is not supposed to implement `Clone`. So would be good to get that removed from the docs. The only way to get more `Receiver`'s is to call `Sender::subscribe`.",2032,2019-12-27T17:32:55Z,0
-567,vadimcn,"> Receiver is not supposed to implement Clone
+549,Grubba27,"With multiple features all tests in local ran smoothly, adjusting PR and linking here",4341,2022-01-28T14:29:58Z,0
+550,Grubba27,"Thx btw, did not knew that could be done, multiple features at once in this manner",4341,2022-01-28T14:31:03Z,0
+551,Grubba27,PR is in this [link](https://github.com/tokio-rs/tokio/pull/4441/files),4341,2022-01-28T14:31:43Z,0
+552,Darksonn,It appears that the test does not compile. You will probably have to fix it.,4441,2022-01-28T14:41:08Z,0
+553,Grubba27,I think was only a wrong import that was we did not see because we were not running these tests,4441,2022-01-28T16:25:49Z,0
+554,Darksonn,I _did_ test locally that this fails before the bugfix.,4443,2022-01-28T17:28:37Z,0
+555,biluohc,Please continue to review @Darksonn ,4436,2022-01-28T09:43:19Z,0
+556,Darksonn,It seems reasonable to me.,4436,2022-01-28T09:48:40Z,0
+557,biluohc,"ok, thanks you very much",4436,2022-01-28T09:51:27Z,0
+558,LucioFranco,"This looks like an oversight in the docs, `Receiver` is not supposed to implement `Clone`. So would be good to get that removed from the docs. The only way to get more `Receiver`'s is to call `Sender::subscribe`.",2032,2019-12-27T17:32:55Z,0
+559,vadimcn,"> Receiver is not supposed to implement Clone
 
 Is there a technical reason for this?  
 
 I'm trying to implement a pub/sub-like architecture with a single publisher and multiple subscribers.  Once publisher shuts down, the subscribers must shut down as well.   
 It's be nice if I could just drop the publisher, and subscribers could detect this by seeing end of the event stream.  However, currently I need to keep extra copies of the Sender around just to be able to create new subscribers, as well as an explicit way of signalling subscribers that the ""real"" publisher has shut down.  If I were able to clone Receiver's, this could be done much simpler.",2032,2020-04-16T06:54:49Z,0
-568,carllerche,Implementing `Clone` would not be trivial. `Clone` would imply the new `Receiver` continues with the same cursor as the original receiver. This would require some non-trivial synchronization and a linear walk of all messages not yet seen by the receiver in order to increment a counter.,2032,2020-04-16T19:47:55Z,0
-569,albel727,"Well, one also doesn't need `Clone` for the said use-case. One needs a `Receiver::subscribe_to_same(&self) -> Self` method, or more flexible yet, a `Receiver::get_sender(&self) -> Sender` method. Both trivially implementable in the current code.",2032,2021-04-07T20:53:09Z,0
-570,Venryx,"Just wanted to mention for other googlers: If you're looking for a channel implementation that has `Clone` support on both its Sender and Receiver objects, the ""flume"" crate worked well for me: https://github.com/zesterer/flume
+560,carllerche,Implementing `Clone` would not be trivial. `Clone` would imply the new `Receiver` continues with the same cursor as the original receiver. This would require some non-trivial synchronization and a linear walk of all messages not yet seen by the receiver in order to increment a counter.,2032,2020-04-16T19:47:55Z,0
+561,albel727,"Well, one also doesn't need `Clone` for the said use-case. One needs a `Receiver::subscribe_to_same(&self) -> Self` method, or more flexible yet, a `Receiver::get_sender(&self) -> Sender` method. Both trivially implementable in the current code.",2032,2021-04-07T20:53:09Z,0
+562,Venryx,"Just wanted to mention for other googlers: If you're looking for a channel implementation that has `Clone` support on both its Sender and Receiver objects, the ""flume"" crate worked well for me: https://github.com/zesterer/flume
 
 Not only does it have full `Clone` support, it also lets you send and receive either synchronously or asynchronously (ie. using Futures), unlike most of the other `Clone`-compatible channel implementations I have seen.",2032,2022-01-29T07:17:17Z,0
-571,Darksonn,"The mock type in tokio-test is written for the `AsyncRead`/`AsyncWrite` traits, not the `Stream` trait. ",4106,2021-09-13T14:08:12Z,0
-572,Munksgaard,"Ah, good point. Perhaps this is not the right place for such a feature request, then?",4106,2021-09-13T14:45:22Z,0
-573,Darksonn,"I don't mind adding some sort of `Stream` mock, but it would be a new type.",4106,2021-09-13T14:54:12Z,0
-574,Munksgaard,Sounds perfect.,4106,2021-09-17T09:04:36Z,0
-575,Munksgaard,"Though I guess it would need to be written for the `Stream` _and_ `Sink` traits, right?",4106,2021-09-17T09:05:09Z,0
-576,Darksonn,You could do both. I'm also ok with something that starts with just `Stream`.,4106,2021-09-21T21:49:41Z,0
-577,AnIrishDuck,"I'm interested in taking this on. So that I understand: the desired behavior for the mock `Stream` is the ability to dynamically insert `Item`s during the test? Otherwise you could just use something like [`Stream::iter`](https://docs.rs/tokio-stream/0.1.7/tokio_stream/fn.iter.html)?
+563,Darksonn,"The mock type in tokio-test is written for the `AsyncRead`/`AsyncWrite` traits, not the `Stream` trait. ",4106,2021-09-13T14:08:12Z,0
+564,Munksgaard,"Ah, good point. Perhaps this is not the right place for such a feature request, then?",4106,2021-09-13T14:45:22Z,0
+565,Darksonn,"I don't mind adding some sort of `Stream` mock, but it would be a new type.",4106,2021-09-13T14:54:12Z,0
+566,Munksgaard,Sounds perfect.,4106,2021-09-17T09:04:36Z,0
+567,Munksgaard,"Though I guess it would need to be written for the `Stream` _and_ `Sink` traits, right?",4106,2021-09-17T09:05:09Z,0
+568,Darksonn,You could do both. I'm also ok with something that starts with just `Stream`.,4106,2021-09-21T21:49:41Z,0
+569,AnIrishDuck,"I'm interested in taking this on. So that I understand: the desired behavior for the mock `Stream` is the ability to dynamically insert `Item`s during the test? Otherwise you could just use something like [`Stream::iter`](https://docs.rs/tokio-stream/0.1.7/tokio_stream/fn.iter.html)?
 
 As for mocking a `Sink` , it seems like we'd need to track all values inserted with `start_send` (via a `Vec`?), and some way to set the next `Poll` state for associated `poll_` methods?
 
 It also seems like we might want sequence-building functionality like the current `io::Builder` has?
 
 A rough example test snippet could be helpful here.",4106,2021-09-21T22:32:31Z,0
-578,Darksonn,"Right, we need it to do more than just `Stream::iter` if we want it to be useful, so it probably needs both the `Stream` and `Sink` impl. 
+570,Darksonn,"Right, we need it to do more than just `Stream::iter` if we want it to be useful, so it probably needs both the `Stream` and `Sink` impl. 
 
 A minimal builder would probably look like this, mirroring the existing builder.
 ```
@@ -2415,16 +2401,16 @@ impl Builder<T, U, E> {
 }
 ```
 Of course, if you have better ideas, that's fine too.",4106,2021-09-22T05:42:22Z,0
-579,Darksonn,"The best example I can think of where this could be used is for e.g. testing code that communicates over a web socket. Such code would probably split it into two halves with [`StreamExt::split`][1] and have one task constantly read from it while another is writing. So we would need it to not panic if a read happens during a write, instead just return `Poll::Pending` until the write we want happens.
+571,Darksonn,"The best example I can think of where this could be used is for e.g. testing code that communicates over a web socket. Such code would probably split it into two halves with [`StreamExt::split`][1] and have one task constantly read from it while another is writing. So we would need it to not panic if a read happens during a write, instead just return `Poll::Pending` until the write we want happens.
 
 [1]: https://docs.rs/futures/0.3/futures/stream/trait.StreamExt.html#method.split",4106,2021-09-22T05:47:41Z,0
-580,AnIrishDuck,"Digging into this some more, it looks like both `Stream` and `Sink` have some runtime requirements that should also be enforced:
+572,AnIrishDuck,"Digging into this some more, it looks like both `Stream` and `Sink` have some runtime requirements that should also be enforced:
 
 - non-fused `Stream` objects have [undefined behavior](https://docs.rs/futures-core/0.3.17/futures_core/stream/trait.Stream.html#tymethod.poll_next) when `next` is called after the stream closes, so we should probably panic if this happens in a test.
 - the various `poll_` methods in `Sink` have [requirements](https://docs.rs/futures/0.3.17/futures/sink/trait.Sink.html#tymethod.poll_ready) about call order that should also be enforced. e.g. `poll_ready` _must_ be called before each call to `start_send`. It's strongly implied that not doing so is undefined behavior, so my gut reaction is we should attempt to detect violations of this rule too and panic if we find them.
 
 As you mentioned in the previous comment, there's some awkwardness around the fact that `Stream` and `Sink` are theoretically decoupled. I'm toying with the idea of having separate action queues for each side, but still need to think through dependency use cases there (e.g. request/response protocols). As `tokio_serde` was the impetus for this change, I'm trying to imagine what tests might look like for its tiny [example](https://github.com/carllerche/tokio-serde/tree/master/examples).",4106,2021-09-22T23:23:23Z,0
-581,Darksonn,"I think it would probably best to tie the `Stream` and `Sink` together instead of decoupling them.
+573,Darksonn,"I think it would probably best to tie the `Stream` and `Sink` together instead of decoupling them.
 
 ---
 
@@ -2433,26 +2419,26 @@ Just to be clear, none of the things you mentioned can cause _undefined_ behavio
 > However, as the `poll_next` method is not marked unsafe, Rust’s usual rules apply: calls must never cause undefined behavior (memory corruption, incorrect use of unsafe functions, or the like), regardless of the stream’s state.
 
 The word for this kind of thing is unspecified behavior.",4106,2021-09-23T06:38:05Z,0
-582,AnIrishDuck,"Ah, that makes sense. Thanks for the clarification. I have the `Stream` half ready. The `Sink` side is significantly more complicated, but I think I should be able to complete that in the next few days.",4106,2021-09-27T21:59:14Z,0
-583,AnIrishDuck,"I'm puzzling out some additional behavior for waking, which is a bit more complex with a two-sided communication channel.
+574,AnIrishDuck,"Ah, that makes sense. Thanks for the clarification. I have the `Stream` half ready. The `Sink` side is significantly more complicated, but I think I should be able to complete that in the next few days.",4106,2021-09-27T21:59:14Z,0
+575,AnIrishDuck,"I'm puzzling out some additional behavior for waking, which is a bit more complex with a two-sided communication channel.
 
 In particular, the documentation for [`.poll()`](https://doc.rust-lang.org/stable/std/future/trait.Future.html) on the `Future` trait specifically states:
 
 > on multiple calls to poll, only the Waker from the Context passed to the most recent call should be scheduled to receive a wakeup.
 
 There is no such guidance for the [poll methods](https://docs.rs/futures/0.3.17/futures/sink/trait.Sink.html) on the `Sink` trait. I'm currently proceeding under the assumption that all calls to `poll` should replace a single waker stored in the sink state, similar to how `poll` works in `Future`. If that needs to be adjusted (e.g. different wakers per poll method), or if there is a better way to figure this out, let me know.",4106,2021-09-29T22:03:28Z,0
-584,Darksonn,"In general, multiple calls to any poll method should only wake the most recent waker. This includes sinks.",4106,2021-09-30T06:44:41Z,0
-585,AnIrishDuck,"Ok, one final question: is `.wait()` necessary? Couldn't it be defined directly in the test by spawning a task that does a `sleep` and then sequences the next operation via the provided `Handle`?
+576,Darksonn,"In general, multiple calls to any poll method should only wake the most recent waker. This includes sinks.",4106,2021-09-30T06:44:41Z,0
+577,AnIrishDuck,"Ok, one final question: is `.wait()` necessary? Couldn't it be defined directly in the test by spawning a task that does a `sleep` and then sequences the next operation via the provided `Handle`?
 
 Is the function useful enough that it should just be included anyway?
 
 And finally, if it is necessary, I'm not seeing any tests for similar functionality in `io`. Is it ok to punt on that for now, or should we use something like [mock_instant](https://lib.rs/crates/mock_instant) to create one?",4106,2021-10-08T21:45:36Z,0
-586,Darksonn,"I believe `.wait()` is useful because without it you don't really get any `Poll::Pending` return values in other situations.
+578,Darksonn,"I believe `.wait()` is useful because without it you don't really get any `Poll::Pending` return values in other situations.
 
 Regarding tests that use time, you should not do that using `mock_instant`. The main Tokio crate already has utilities for mocking the `tokio::time::Instant` type.",4106,2021-10-10T07:55:34Z,0
-587,Grubba27,Is this still open  ? and is this a good begginer issue ?,4106,2022-01-29T14:37:41Z,0
-588,Darksonn,It is indeed still open. You are welcome to give it a try!,4106,2022-01-29T14:45:39Z,0
-589,Grubba27,"Awesome! from where could I start ? 
+579,Grubba27,Is this still open  ? and is this a good begginer issue ?,4106,2022-01-29T14:37:41Z,0
+580,Darksonn,It is indeed still open. You are welcome to give it a try!,4106,2022-01-29T14:45:39Z,0
+581,Grubba27,"Awesome! from where could I start ? 
 I was reading this thread and i think i got it like 50% so i'm leaving here what i got it as my to-do list. 
 
 
@@ -2477,8 +2463,8 @@ _mentioned builder_
 
 - [ ] Then add a vec of values for the execution of the stream
 - [ ] assert if the values are there for the execution time like is done in stream_timeout.rs ?",4106,2022-01-29T15:05:06Z,0
-590,Darksonn,I believe that the implementation would be very similar to the mock in `tokio_test/io.rs`. I would start by reading that for inspiration.,4106,2022-01-29T15:35:08Z,0
-591,Grubba27,"
+582,Darksonn,I believe that the implementation would be very similar to the mock in `tokio_test/io.rs`. I would start by reading that for inspiration.,4106,2022-01-29T15:35:08Z,0
+583,Grubba27,"
 Okay, I think I'm getting somewere. How can i create a stream from a Mock type since its not iterable? 
 ```rust
 use futures_util::stream; // why not the use tokio_stream::{self as stream, StreamExt}; ?
@@ -2495,23 +2481,23 @@ async fn stream_read(){
 ```
 
 ",4106,2022-01-29T16:43:14Z,0
-592,Darksonn,The `Mock` type itself should be a `Stream`. No conversion should be necessary.,4106,2022-01-30T09:30:15Z,0
-593,carllerche,Hmmm I’m not sure why CI is hanging…,4448,2022-01-30T01:09:00Z,0
-594,carllerche,Ok it was a merge fail. This PR should be good to go,4448,2022-01-30T02:57:06Z,0
-595,carllerche,The CircleCI build will fail due to missing configuration. It shouldn't block merging.,4434,2022-01-27T23:56:09Z,0
-596,Darksonn,This needs to include #4437.,4434,2022-01-28T08:45:17Z,0
-597,carllerche,"@Darksonn thanks, I'll pull it in once I wrangle CI.",4434,2022-01-28T18:21:47Z,0
-598,carllerche,"@Darksonn Ok, I backported the fix as well.",4434,2022-01-29T23:01:26Z,0
-599,carllerche,Reordering commit before merge.,4434,2022-01-30T18:13:30Z,0
-600,danburkert,"I've added a PR with the proposed new methods here: https://github.com/tokio-rs/tokio/pull/4447. I went with the names `[try_]acquire_permits[_owned]`, but definitely open to changing that. I did not add deprecation tags to the original methods, but can if that's the consensus.",4446,2022-01-29T22:27:43Z,0
-601,Darksonn,"It's unfortunate that there's a mismatch in the types, but I'm not convinced its worth fixing it. Note that on 32-bit platforms, the maximum number of permits isn't 2^32, but rather 2^29. Similarly, on 64-bit, the maximum is 2^61.",4446,2022-01-30T09:37:46Z,0
-602,danburkert,"@Darksonn with the API as it is, it's not possible to use `Semaphore` to implement memory leases with support for leases > 4GiB.  Memory leases of this style are a common technique data analysis systems, warehousing, query execution, etc.  For these usecases a 4GiB limit is orders of magnitude too low.  The 2^61 limit is not an issue since no practical system is approaching that much memory, and x86-64 is typically limited to 52 bytes of addressable space anyway.
+584,Darksonn,The `Mock` type itself should be a `Stream`. No conversion should be necessary.,4106,2022-01-30T09:30:15Z,0
+585,carllerche,Hmmm I’m not sure why CI is hanging…,4448,2022-01-30T01:09:00Z,0
+586,carllerche,Ok it was a merge fail. This PR should be good to go,4448,2022-01-30T02:57:06Z,0
+587,carllerche,The CircleCI build will fail due to missing configuration. It shouldn't block merging.,4434,2022-01-27T23:56:09Z,0
+588,Darksonn,This needs to include #4437.,4434,2022-01-28T08:45:17Z,0
+589,carllerche,"@Darksonn thanks, I'll pull it in once I wrangle CI.",4434,2022-01-28T18:21:47Z,0
+590,carllerche,"@Darksonn Ok, I backported the fix as well.",4434,2022-01-29T23:01:26Z,0
+591,carllerche,Reordering commit before merge.,4434,2022-01-30T18:13:30Z,0
+592,danburkert,"I've added a PR with the proposed new methods here: https://github.com/tokio-rs/tokio/pull/4447. I went with the names `[try_]acquire_permits[_owned]`, but definitely open to changing that. I did not add deprecation tags to the original methods, but can if that's the consensus.",4446,2022-01-29T22:27:43Z,0
+593,Darksonn,"It's unfortunate that there's a mismatch in the types, but I'm not convinced its worth fixing it. Note that on 32-bit platforms, the maximum number of permits isn't 2^32, but rather 2^29. Similarly, on 64-bit, the maximum is 2^61.",4446,2022-01-30T09:37:46Z,0
+594,danburkert,"@Darksonn with the API as it is, it's not possible to use `Semaphore` to implement memory leases with support for leases > 4GiB.  Memory leases of this style are a common technique data analysis systems, warehousing, query execution, etc.  For these usecases a 4GiB limit is orders of magnitude too low.  The 2^61 limit is not an issue since no practical system is approaching that much memory, and x86-64 is typically limited to 52 bytes of addressable space anyway.
 
 WRT the cost of fixing it, the semaphore internals are already in terms of `usize` so it's not a major change.",4446,2022-01-30T20:23:55Z,0
-603,danburkert,"It's situationally possible to extend the usefulness of the current `Semaphore` type by mapping a lease to a page of memory instead of a byte, yielding a leases of up to 2 ^ 44 = 16 TiB, which is fine for most systems now, but perhaps only for a few more years.",4446,2022-01-30T20:30:56Z,0
-604,Darksonn,Thanks.,4452,2022-01-31T09:06:47Z,0
-605,carllerche,This should be good to go,4451,2022-01-30T21:52:14Z,0
-606,taiki-e,"stacked borrows violation with -Zmiri-tag-raw-pointers:
+595,danburkert,"It's situationally possible to extend the usefulness of the current `Semaphore` type by mapping a lease to a page of memory instead of a byte, yielding a leases of up to 2 ^ 44 = 16 TiB, which is fine for most systems now, but perhaps only for a few more years.",4446,2022-01-30T20:30:56Z,0
+596,Darksonn,Thanks.,4452,2022-01-31T09:06:47Z,0
+597,carllerche,This should be good to go,4451,2022-01-30T21:52:14Z,0
+598,taiki-e,"stacked borrows violation with -Zmiri-tag-raw-pointers:
 
 ```sh
 MIRIFLAGS=""-Zmiri-disable-isolation -Zmiri-tag-raw-pointers"" cargo miri test -p tokio --features full --lib -- runtime::tests::queue::overflow
@@ -2617,24 +2603,24 @@ note: inside closure at tokio/src/runtime/tests/queue.rs:24:1
 If run without -Zmiri-tag-raw-pointers, the test succeeds.
 
 ",4397,2022-01-12T16:00:44Z,0
-607,taiki-e,"~~Hopefully, I know how to fix that SB violation.~~
+599,taiki-e,"~~Hopefully, I know how to fix that SB violation.~~
 
 Nah, it seems so complicated...
 ",4397,2022-01-12T18:15:37Z,0
-608,Darksonn,That typically means that it depends on unreleased (at the time) tokio-macros changes. Try 1.6.0,4455,2022-01-31T17:51:28Z,0
-609,carllerche,@Darksonn Done.,4455,2022-01-31T17:59:32Z,0
-610,carllerche,It seems like Cirrus ARM does not support IPv6. Thoughts @taiki-e ?,4450,2022-01-30T21:41:20Z,0
-611,taiki-e,"IIRC, Arm containers are executed in AWS's EKS. And AWS added support for IPv6 [a few weeks ago](https://github.com/aws/containers-roadmap/issues/835#issuecomment-1006804864). So it will probably be available in Cirrus CI in the near future.",4450,2022-01-31T03:45:04Z,0
-612,carllerche,"@taiki-e Thanks, I reached out to Cirrus (see linked issue above).",4450,2022-01-31T21:06:44Z,0
-613,Darksonn,The first version of Cargo that supports the `rust-version` field is 1.56.0.,4457,2022-01-31T18:45:16Z,0
-614,olix0r,@Darksonn just noting because it's set here https://github.com/tokio-rs/tokio/blob/77468ae3b0296eaa12a1c14b3abb44d0b3fb5ce6/tokio/Cargo.toml#L11 (and maybe elsewhere),4457,2022-01-31T18:46:39Z,0
-615,olix0r,I found some additional places where 1.46 was specified. Fixed in https://github.com/tokio-rs/tokio/pull/4458 (which is a PR against this branch),4457,2022-01-31T20:45:32Z,0
-616,BraulioVM,"I've implemented the functionality (epollerr awaking waiters) for the `AsyncRead` slot as well (also for the `AsyncWrite` one actually, but that one is tricky because `ready.is_error()` implies `ready.is_write_closed()`, which already waiters with a write interest). This is not part of the original issue but it makes sense to me to be consistent? We can do it in separate PRs if you prefer though.
+600,Darksonn,That typically means that it depends on unreleased (at the time) tokio-macros changes. Try 1.6.0,4455,2022-01-31T17:51:28Z,0
+601,carllerche,@Darksonn Done.,4455,2022-01-31T17:59:32Z,0
+602,carllerche,It seems like Cirrus ARM does not support IPv6. Thoughts @taiki-e ?,4450,2022-01-30T21:41:20Z,0
+603,taiki-e,"IIRC, Arm containers are executed in AWS's EKS. And AWS added support for IPv6 [a few weeks ago](https://github.com/aws/containers-roadmap/issues/835#issuecomment-1006804864). So it will probably be available in Cirrus CI in the near future.",4450,2022-01-31T03:45:04Z,0
+604,carllerche,"@taiki-e Thanks, I reached out to Cirrus (see linked issue above).",4450,2022-01-31T21:06:44Z,0
+605,Darksonn,The first version of Cargo that supports the `rust-version` field is 1.56.0.,4457,2022-01-31T18:45:16Z,0
+606,olix0r,@Darksonn just noting because it's set here https://github.com/tokio-rs/tokio/blob/77468ae3b0296eaa12a1c14b3abb44d0b3fb5ce6/tokio/Cargo.toml#L11 (and maybe elsewhere),4457,2022-01-31T18:46:39Z,0
+607,olix0r,I found some additional places where 1.46 was specified. Fixed in https://github.com/tokio-rs/tokio/pull/4458 (which is a PR against this branch),4457,2022-01-31T20:45:32Z,0
+608,BraulioVM,"I've implemented the functionality (epollerr awaking waiters) for the `AsyncRead` slot as well (also for the `AsyncWrite` one actually, but that one is tricky because `ready.is_error()` implies `ready.is_write_closed()`, which already waiters with a write interest). This is not part of the original issue but it makes sense to me to be consistent? We can do it in separate PRs if you prefer though.
 
 My current plan is to find a satisfactory way to test these changes. It doesn't seem immediately obvious how to do it, because the only way I know to trigger a `EPOLLERR` is through a setup that generally requires root permissions (the one in the issue). Once I write some tests, I will think through the TODOs I've left in the code, and clean-up the code I've already written (which isn't great yet).
 
 Please let me know if you have any thoughts",4444,2022-02-01T00:10:27Z,0
-617,BraulioVM,"I think I've found a way to test this automatically! By searching `EPOLLERR` on https://github.com/torvalds/linux (who would have guessed this would actually work) I've found https://github.com/torvalds/linux/blob/46f4945e2b39dda4b832909434785483e028419d/fs/eventfd.c#L175-L176 Indeed, the man page for eventfd (2) mentions:
+609,BraulioVM,"I think I've found a way to test this automatically! By searching `EPOLLERR` on https://github.com/torvalds/linux (who would have guessed this would actually work) I've found https://github.com/torvalds/linux/blob/46f4945e2b39dda4b832909434785483e028419d/fs/eventfd.c#L175-L176 Indeed, the man page for eventfd (2) mentions:
 
 > If an overflow of the counter value was detected, then
                  select(2) indicates the file descriptor as being both
@@ -2642,3 +2628,58 @@ Please let me know if you have any thoughts",4444,2022-02-01T00:10:27Z,0
                  event.
 
 So this looks very promising! I will try this over the following days",4444,2022-02-01T00:29:24Z,0
+610,BraulioVM,"> So this looks very promising!
+
+That was wrong. It's true that if the counter's value is 0xfffffffff then polling on the eventfd will return EPOLLERR, but it's very hard to write that value to the eventfd in the first place. According to the man page
+
+> As noted above, write(2) can never overflow the
+                 counter.  However an overflow can occur if 2^64 eventfd
+                 ""signal posts"" were performed by the KAIO subsystem
+                 (theoretically possible, but practically unlikely)
+
+I will search for other ways to trigger EPOLLER",4444,2022-02-01T18:35:13Z,0
+611,carllerche,"Additionally, when a `TaskSet` is dropped, it should cancel all remaining spawned tasks.",3903,2021-06-30T16:16:16Z,0
+612,hawkw," Couple thoughts:
+ - it would be nice for `tokio-util` to provide a stream adapter for this, which we could do easily with the `poll_next_finished` method :+1: 
+ - I notice that `next_finished` and `poll_next_finished` return `Option<T>`s, presumably ignoring any `JoinError`s. Most of the time, this is _probably_ sufficient and is definitely a more ergonomic interface than having to deal with fallibility...but I can also imagine not wanting to have the `TaskSet` swallow panics. Maybe there should be a separate `try_next_finished` or something that returns an `Option<Result<T, JoinError>>`, so we can propagate task panics?
+
+Overall this would definitely be nice to have!",3903,2021-06-30T16:59:35Z,0
+613,carllerche,"Right, we probably should include the join error. good call.",3903,2021-06-30T17:10:03Z,0
+614,Darksonn,"Right, I forgot about the `JoinError`. And `tokio-stream` will definitely provide a `Stream` adapter in [`tokio_stream::wrappers`][1].
+
+Another thought is to include a `FromIterator` impl you so you can `collect` in to the `TaskSet` type.
+
+[1]: https://docs.rs/tokio-stream/0.1/tokio_stream/wrappers/index.html",3903,2021-06-30T18:11:37Z,0
+615,Darksonn,"Regarding methods that don't return a `Result<T, JoinError>`, we could have it resume the panic. However, do we even want to have any methods that do this?",3903,2021-06-30T20:12:47Z,0
+616,hawkw,"Currently, we never resume panics...but I think it might be reasonable to at least have one version of the API that does that?",3903,2021-06-30T22:40:58Z,0
+617,Matthias247,"So is this a clone of `FuturesUnordered`, or explicitly for `JoinHandle`s?
+
+It seemes like something in between, because `spawn` sounds it would spawn a real independent task. Then this seems like a version of #1897 without any of the guarantees that tasks actually stop if you stop interacting with the `TaskSet`.
+
+If this is just a `FuturesUnordered` clone, then it has stronger guarantees. People can store `JoinHandle`s manually in it, and might have some idea that those tasks might continue to run in the background. But then again people can directly use `FuturesUnordered` - I have yet to see an application which imports tokio and not `futures`.
+",3903,2021-07-01T18:48:13Z,0
+618,Darksonn,"The `spawn` method spawns a real task, yes. It can be thought of as a `FuturesUnordered` for `JoinHandle`s.",3903,2021-07-01T19:04:07Z,0
+619,Noah-Kennedy,"I'm actually most interested in the cancellation capability here. It's not uncommon in certain types of code to need to mass cancel a set of tasks under some sort of ""scope"", and this seems like an excellent solution to that problem.",3903,2021-09-25T20:20:32Z,0
+620,Noah-Kennedy,I might release a prototype in a separate crate.,3903,2021-09-27T15:47:05Z,0
+621,Noah-Kennedy,"I'm working on a prototype for this right now. One nice feature not mentioned that I added is an async `shutdown` method which aborts all tasks and then waits for them all to finish, consuming the `TaskSet` in the process.",3903,2021-10-29T17:39:45Z,0
+622,Noah-Kennedy,"Opened a PR: https://github.com/tokio-rs/tokio/pull/4238
+
+This _should_ be pretty close to something we can all agree on.",3903,2021-11-16T00:17:39Z,0
+623,Noah-Kennedy,"So, an issue with the approach I used is that there isn't a good way from tokio-util to do something like FuturesUnordered without re-implementing the internal data structure that FuturesUnordered is built around, unless you want `poll_next_finished` to be O(n), as the naive approach of using a vec requires you to scan through your list of tasks, polling as you go.",3903,2021-11-16T20:17:19Z,0
+624,carllerche,@Darksonn How would we add an API in the future for spawning tasks that *don't* abort when the set is dropped?,4335,2021-12-21T19:44:20Z,0
+625,Noah-Kennedy,"Considering that task set is going to be used a lot for resource cleanup and management, we probably want something along the lines of a `fn shutdown(self) -> impl Future<()>` that aborts all of the tasks and waits for them to finish, so that users can await the termination of the tasks on the set.",4335,2021-12-21T20:02:48Z,0
+626,Darksonn,How should we handle panics in the sub-tasks when the user has called `shutdown`?,4335,2022-01-10T10:34:37Z,0
+627,carllerche,"""clean shutdown"" is a good call.
+
+What I would probably do is a call to `shutdown()` aborts remaining tasks, but there *may* be some tasks that have since completed (either successfully or w/ a panic). The user of `TaskSet` would then continue to drain results until `None`. Once `None` is reached, then no more tasks will complete and the `TaskSet` can be shutdown.
+
+This is a similar strategy as the `mpsc` channel, which maps pretty well to this case.",4335,2022-01-10T16:33:45Z,0
+628,Noah-Kennedy,I'm in agreement with Carl here. It would be best not to propagate the panics.,4335,2022-01-11T02:48:42Z,0
+629,Darksonn,"I have reworked the `IdleNotifiedSet` to guarantee that the value stored in an entry is dropped when the entry is removed from the set. If a value isn't destroyed when the entry is dropped, then that's a ref-cycle because the entry holds a `JoinHandle` to the task, but the task holds a waker to the entry.
+
+I'm also adding a test for the coop budget as I realized that `join_one` didn't correctly handle it before I reworked `IdleNotifiedSet`.",4335,2022-01-24T12:01:36Z,0
+630,carllerche,cc @seanmonstar @hawkw ,4335,2022-01-24T18:11:54Z,0
+631,Noah-Kennedy,"This seems about ready. I left a few questions and comments, but I don't think they block a merge here.",4335,2022-01-26T17:51:31Z,0
+632,Noah-Kennedy,"@saleemadat @Darksonn This is a draft PR. I am adding `#[track_caller]` to the whole codebase, then adding tests. This is not finished yet.",4445,2022-02-01T23:17:48Z,0
+633,ellenhp,Spoke a bit with some Rust ESP-32 people and they indicated this was the right way to go about this change. Their only warning was that most of tokio still won't build which I knew already. Ready for review. Thank you!,4460,2022-02-01T15:24:11Z,0
+634,Darksonn,I don't really understand why CI is stuck. Are you able to push an empty commit?,4460,2022-02-02T15:24:39Z,0
