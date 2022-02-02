@@ -28,7 +28,7 @@ Associated Publication -
 # Usage:
 Execute the Code/MSR2022.ipynb file.
 
-Note: A list of repositories and a GitHub API token has to be provided in the file immediately after the imports for querying
+Note: A list of repositories and a GitHub API token has to be provided in the notebook immediately after the imports for querying
 
 # Description:
 The script will query the repositories given in the list of repositories using Perceval, extracts the required data and stores it in < owner >_< repo >.csv format in /Data/ folder. 
